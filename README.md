@@ -37,4 +37,7 @@ use opendrop::formats::read_archive;
 
 ## License
 
-Licensed under MIT
+MIT license
+
+Note that the code has been generated using agentic AI. Thus, before using reusing parts, please check
+if the code has been directly copied from somewhere else
