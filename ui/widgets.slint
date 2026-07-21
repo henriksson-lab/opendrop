@@ -1,0 +1,75 @@
+// Reusable Win32-style widgets: a 3-D beveled button and a sunken panel.
+
+import { Theme } from "theme.slint";
+
+// A classic grey 3-D beveled push button. Draws raised bevels that invert while
+// pressed, matching the ND-1000 toolbar/menu buttons.
+export component BevelButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <length> font-size: 12px;
+    in property <bool> bold: false;
+    callback clicked();
+
+    background: Theme.control-face;
+    property <bool> pressed: touch.pressed && enabled;
+
+    // Raised (or, when pressed, sunken) bevel: light top/left, dark bottom/right.
+    Rectangle {
+        x: 0; y: 0; width: 100%; height: 2px;
+        background: root.pressed ? Theme.bevel-dark : Theme.bevel-light;
+    }
+    Rectangle {
+        x: 0; y: 0; width: 2px; height: 100%;
+        background: root.pressed ? Theme.bevel-dark : Theme.bevel-light;
+    }
+    Rectangle {
+        x: 0; y: parent.height - 2px; width: 100%; height: 2px;
+        background: root.pressed ? Theme.bevel-light : Theme.bevel-darker;
+    }
+    Rectangle {
+        x: parent.width - 2px; y: 0; width: 2px; height: 100%;
+        background: root.pressed ? Theme.bevel-light : Theme.bevel-darker;
+    }
+
+    Text {
+        x: root.pressed ? (parent.width - self.width) / 2 + 1px : (parent.width - self.width) / 2;
+        y: root.pressed ? (parent.height - self.height) / 2 + 1px : (parent.height - self.height) / 2;
+        text: root.text;
+        color: root.enabled ? Theme.text-color : Theme.disabled-text;
+        font-size: root.font-size;
+        font-weight: root.bold ? 700 : 400;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        width: parent.width - 8px;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A sunken (etched-in) panel — light bottom/right, dark top/left — used to frame
+// readouts and the plot area.
+export component SunkenPanel inherits Rectangle {
+    background: white;
+    Rectangle {
+        x: 0; y: 0; width: 100%; height: 1px;
+        background: Theme.bevel-dark;
+    }
+    Rectangle {
+        x: 0; y: 0; width: 1px; height: 100%;
+        background: Theme.bevel-dark;
+    }
+    Rectangle {
+        x: 0; y: parent.height - 1px; width: 100%; height: 1px;
+        background: Theme.bevel-light;
+    }
+    Rectangle {
+        x: parent.width - 1px; y: 0; width: 1px; height: 100%;
+        background: Theme.bevel-light;
+    }
+    @children
+}

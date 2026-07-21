@@ -1,0 +1,97 @@
+// OpenDrop — root window and shared theme.
+//
+// `AppWindow` stays the exported root so `include_modules!()` in main.rs keeps
+// working. It owns the whole application state (properties driven by the Rust
+// controller) and switches between the Main Menu launcher and the Nucleic Acid
+// measurement screen.
+
+import { MainMenu } from "main_menu.slint";
+import { NucleicAcidScreen } from "nucleic_acid.slint";
+import { Theme } from "theme.slint";
+
+export component AppWindow inherits Window {
+    title: "NanoDrop 1000 3.8 — OpenDrop";
+    default-font-size: 12px;
+    background: Theme.window-face;
+    // Designed for the original ~1024x768; keep a fixed-ish comfortable size.
+    preferred-width: 1024px;
+    preferred-height: 700px;
+    min-width: 900px;
+    min-height: 640px;
+
+    // 0 = Main Menu, 1 = Nucleic Acid screen.
+    in-out property <int> page: 0;
+
+    // ---- Nucleic Acid screen state (driven by the Rust controller) ----
+    in property <string> plot-commands;
+    in property <string> y-max-label: "1.0";
+    in property <string> a260-text: "—";
+    in property <string> a280-text: "—";
+    in property <string> ratio-280-text: "—";
+    in property <string> ratio-230-text: "—";
+    in property <string> conc-text: "—";
+    in property <color> conc-color: Theme.dna-color;
+    in property <bool> has-blank: false;
+    in property <int> sample-count: 0;
+    in property <string> status-text: "Load a blank and click Blank to begin.";
+    in property <string> firmware-text: "";
+    in-out property <int> sample-type-index: 0;
+    in-out property <string> sample-id: "";
+    in-out property <string> cursor-nm: "230";
+    in property <string> cursor-abs-text: "—";
+
+    // ---- Callbacks handled in Rust ----
+    callback measure();
+    callback blank();
+    callback reblank();
+    callback sample-type-changed(int);
+    callback cursor-changed(string);
+    callback request-exit();
+
+    // Coming-soon banner text for not-yet-implemented modules.
+    property <string> coming-soon: "";
+
+    if page == 0: MainMenu {
+        width: 100%;
+        height: 100%;
+        coming-soon: root.coming-soon;
+        // Only Nucleic Acid is functional; index 0 in the module grid.
+        open-module(index, name) => {
+            if index == 0 {
+                root.page = 1;
+                root.coming-soon = "";
+            } else {
+                root.coming-soon = name + " module is not implemented yet.";
+            }
+        }
+        request-exit => { root.request-exit(); }
+    }
+
+    if page == 1: NucleicAcidScreen {
+        width: 100%;
+        height: 100%;
+        plot-commands: root.plot-commands;
+        y-max-label: root.y-max-label;
+        a260-text: root.a260-text;
+        a280-text: root.a280-text;
+        ratio-280-text: root.ratio-280-text;
+        ratio-230-text: root.ratio-230-text;
+        conc-text: root.conc-text;
+        conc-color: root.conc-color;
+        has-blank: root.has-blank;
+        sample-count: root.sample-count;
+        status-text: root.status-text;
+        firmware-text: root.firmware-text;
+        sample-type-index <=> root.sample-type-index;
+        sample-id <=> root.sample-id;
+        cursor-nm <=> root.cursor-nm;
+        cursor-abs-text: root.cursor-abs-text;
+
+        measure => { root.measure(); }
+        blank => { root.blank(); }
+        reblank => { root.reblank(); }
+        sample-type-changed(i) => { root.sample-type-changed(i); }
+        cursor-changed(v) => { root.cursor-changed(v); }
+        exit-to-menu => { root.page = 0; }
+    }
+}

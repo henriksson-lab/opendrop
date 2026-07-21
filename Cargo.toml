@@ -1,0 +1,88 @@
+[package]
+name = "opendrop"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mahogny/opendrop"
+authors = ["OpenDrop contributors"]
+description = "Open-source library and GUI for the NanoDrop ND-1000 spectrophotometer"
+default-run = "opendrop"
+
+[lib]
+name = "opendrop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opendrop"
+path = "src/main.rs"
+# The binary is the GUI; building it requires the `gui` feature (on by default).
+required-features = ["gui"]
+
+[dependencies]
+thiserror = "2"
+encoding_rs = "0.8"
+# GUI-only dependencies (pulled in only with the `gui` feature).
+anyhow = { version = "1", optional = true }
+slint = { version = "1.8", optional = true }
+
+[build-dependencies]
+slint-build = { version = "1.8", optional = true }
+
+[features]
+default = ["gui"]
+# The desktop GUI + the `opendrop` binary. Disable to use OpenDrop as a library.
+gui = ["dep:slint", "dep:slint-build", "dep:anyhow"]
+# The real Ocean Optics USB2000 hardware backend (stub until a device capture
+# confirms the byte protocol; see docs/usb_protocol_findings.md).
+usb2000 = []
+
+# ---------------------------------------------------------------------------
+# Debian/Ubuntu packaging (cargo-deb). Build with `make package-linux`
+# (i.e. `cargo deb --no-build` after `cargo build --release`).
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+maintainer = "OpenDrop contributors <opendrop-maintainers@users.noreply.github.com>"
+copyright = "2026, OpenDrop contributors"
+section = "science"
+priority = "optional"
+extended-description = """\
+OpenDrop is an open-source desktop GUI reimplementation of the software for the \
+Thermo Scientific NanoDrop ND-1000 microvolume spectrophotometer. It reads and \
+plots absorbance spectra, computes nucleic-acid and protein concentrations, and \
+opens NanoDrop archive files (.ndj/.ndt/.ndv)."""
+# $auto pulls the ELF-linked libraries (libfontconfig1, libfreetype6, ...) that
+# dpkg-shlibdeps resolves from the binary. libxkbcommon0 is dlopen'd at runtime
+# by the winit windowing backend (X11 or Wayland) so it never shows up in ldd;
+# add it explicitly. The remaining X11/Wayland client libs are Recommends since
+# only one display stack is needed at a time.
+depends = "$auto, libxkbcommon0"
+recommends = "libwayland-client0, libwayland-cursor0, libx11-6, libxcb1"
+assets = [
+    ["target/release/opendrop", "usr/bin/", "755"],
+    ["packaging/opendrop.desktop", "usr/share/applications/opendrop.desktop", "644"],
+    ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/opendrop.svg", "644"],
+    ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/opendrop.png", "644"],
+    ["assets/icon-128.png", "usr/share/icons/hicolor/128x128/apps/opendrop.png", "644"],
+]
+maintainer-scripts = "packaging/deb"
+
+# ---------------------------------------------------------------------------
+# macOS .app bundle (cargo-bundle). Build with `make package-macos` on macOS
+# (i.e. `cargo bundle --release`), then wrapped into a .dmg.
+# ---------------------------------------------------------------------------
+[package.metadata.bundle]
+name = "OpenDrop"
+identifier = "org.opendrop.OpenDrop"
+category = "public.app-category.education"
+short_description = "GUI for the NanoDrop ND-1000 spectrophotometer"
+long_description = """\
+OpenDrop is an open-source desktop GUI reimplementation of the software for the \
+Thermo Scientific NanoDrop ND-1000 microvolume spectrophotometer."""
+copyright = "2026, OpenDrop contributors"
+icon = [
+    "assets/icon-32.png",
+    "assets/icon-128.png",
+    "assets/icon-256.png",
+    "assets/icon-512.png",
+    "assets/icon-1024.png",
+]

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=OpenDrop
+GenericName=Spectrophotometer GUI
+Comment=Open-source GUI for the NanoDrop ND-1000 microvolume spectrophotometer
+Exec=opendrop %F
+Icon=opendrop
+Terminal=false
+Categories=Science;Biology;
+Keywords=nanodrop;spectrophotometer;absorbance;nucleic acid;DNA;RNA;protein;
+# Must match the window's Wayland app_id / X11 WM_CLASS so the running window
+# associates with this launcher entry (and picks up its icon on Wayland).
+StartupWMClass=opendrop

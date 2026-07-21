@@ -1,0 +1,362 @@
+// Nucleic Acid measurement screen — §7.2 of docs/original_gui_research.md.
+//
+// Layout: a common button header on top, a spectral graph on the left (~2/3,
+// cropped to 220–350 nm), and a vertical stack of readouts/controls on the
+// right (~1/3), with the color-keyed ng/µL box as the headline number.
+
+import { ComboBox, LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { BevelButton, SunkenPanel } from "widgets.slint";
+
+// The spectral trace + axes. The trace itself is an SVG path (built in Rust) in
+// a 0..1000 viewbox; X spans 220–350 nm, Y is auto-scaled 10 mm absorbance.
+component SpectrumPlot inherits Rectangle {
+    in property <string> commands;
+    in property <string> y-max-label;
+    // 220..350 nm tick positions as fractions of the plot width.
+    property <[{nm: string, frac: float}]> ticks: [
+        { nm: "220", frac: 0.0 },
+        { nm: "240", frac: 0.153 },
+        { nm: "260", frac: 0.307 },
+        { nm: "280", frac: 0.461 },
+        { nm: "300", frac: 0.615 },
+        { nm: "320", frac: 0.769 },
+        { nm: "340", frac: 0.923 },
+        { nm: "350", frac: 1.0 },
+    ];
+
+    HorizontalLayout {
+        spacing: 2px;
+
+        // Y-axis: rotated title + max/zero labels.
+        VerticalLayout {
+            width: 46px;
+            Text {
+                text: root.y-max-label;
+                font-size: 10px;
+                horizontal-alignment: right;
+                width: 100%;
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                Text {
+                    text: "10 mm Absorbance";
+                    font-size: 10px;
+                    transform-rotation: -90deg;
+                }
+            }
+            Text {
+                text: "0.0";
+                font-size: 10px;
+                horizontal-alignment: right;
+                width: 100%;
+            }
+            // Spacer aligning the "0" with the plot bottom axis labels.
+            Rectangle { height: 16px; }
+        }
+
+        VerticalLayout {
+            // Plot canvas.
+            plot := SunkenPanel {
+                vertical-stretch: 1;
+                background: Theme.plot-bg;
+                clip: true;
+
+                // Vertical gridlines at each tick.
+                for t in root.ticks: Rectangle {
+                    x: t.frac * (parent.width - 2px) + 1px;
+                    y: 1px;
+                    width: 1px;
+                    height: parent.height - 2px;
+                    background: Theme.plot-grid;
+                }
+
+                // The spectrum trace (SVG path in a 0..1000 viewbox).
+                Path {
+                    x: 1px; y: 1px;
+                    width: parent.width - 2px;
+                    height: parent.height - 2px;
+                    viewbox-x: 0; viewbox-y: 0;
+                    viewbox-width: 1000; viewbox-height: 1000;
+                    commands: root.commands;
+                    stroke: Theme.trace;
+                    stroke-width: 1.5px;
+                    fill: transparent;
+                }
+            }
+
+            // X-axis tick labels.
+            Rectangle {
+                height: 14px;
+                for t in root.ticks: Text {
+                    x: t.frac * (parent.width) - self.width / 2;
+                    text: t.nm;
+                    font-size: 10px;
+                }
+            }
+            Text {
+                text: "Wavelength nm";
+                font-size: 10px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
+
+// One "label : value" readout row (etched value box on the right).
+component ReadoutRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> emphasize: false;
+    spacing: 6px;
+    height: 24px;
+    Text {
+        text: label;
+        vertical-alignment: center;
+        horizontal-alignment: right;
+        width: 108px;
+        font-size: 12px;
+    }
+    SunkenPanel {
+        horizontal-stretch: 1;
+        background: white;
+        Text {
+            text: value;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            x: parent.width - self.width - 6px;
+            font-size: 12px;
+            font-weight: emphasize ? 700 : 400;
+        }
+    }
+}
+
+export component NucleicAcidScreen inherits Rectangle {
+    // ---- inputs from controller ----
+    in property <string> plot-commands;
+    in property <string> y-max-label;
+    in property <string> a260-text;
+    in property <string> a280-text;
+    in property <string> ratio-280-text;
+    in property <string> ratio-230-text;
+    in property <string> conc-text;
+    in property <color> conc-color;
+    in property <bool> has-blank;
+    in property <int> sample-count;
+    in property <string> status-text;
+    in property <string> firmware-text;
+    in property <string> cursor-abs-text;
+    in-out property <int> sample-type-index;
+    in-out property <string> sample-id;
+    in-out property <string> cursor-nm;
+
+    // ---- callbacks ----
+    callback measure();
+    callback blank();
+    callback reblank();
+    callback sample-type-changed(int);
+    callback cursor-changed(string);
+    callback exit-to-menu();
+
+    background: Theme.window-face;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 6px;
+
+        // Menu bar (File | Edit | Help) — decorative chrome.
+        HorizontalLayout {
+            height: 20px;
+            spacing: 16px;
+            alignment: start;
+            Text { text: "File"; }
+            Text { text: "Edit"; }
+            Text { text: "Help"; }
+        }
+
+        // ---- Common button header ----
+        HorizontalLayout {
+            height: 56px;
+            spacing: 6px;
+
+            // Measure — grayed until a blank exists.
+            BevelButton {
+                text: "Measure";
+                bold: true;
+                width: 84px;
+                enabled: root.has-blank;
+                clicked => { root.measure(); }
+            }
+
+            // Two rows of small header buttons.
+            VerticalLayout {
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    BevelButton { text: "Re-blank"; width: 90px; enabled: root.has-blank; clicked => { root.reblank(); } }
+                    BevelButton { text: "Print Screen"; width: 90px; enabled: false; }
+                    BevelButton { text: "Recording"; width: 90px; enabled: false; }
+                }
+                HorizontalLayout {
+                    spacing: 4px;
+                    BevelButton { text: "Blank"; width: 90px; clicked => { root.blank(); } }
+                    BevelButton { text: "Print Report"; width: 90px; enabled: false; }
+                    BevelButton { text: "Show Report"; width: 90px; enabled: false; }
+                }
+            }
+
+            // Status text.
+            Rectangle {
+                horizontal-stretch: 1;
+                Text {
+                    text: root.status-text;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    x: 8px;
+                    width: parent.width - 8px;
+                    wrap: word-wrap;
+                }
+            }
+
+            BevelButton {
+                text: "Exit";
+                width: 64px;
+                clicked => { root.exit-to-menu(); }
+            }
+        }
+
+        // ---- Body: graph (left ~2/3) + readouts (right ~1/3) ----
+        HorizontalLayout {
+            spacing: 10px;
+
+            // Left — graph column.
+            VerticalLayout {
+                horizontal-stretch: 2;
+                spacing: 4px;
+
+                // Overlay control (decorative for now).
+                HorizontalLayout {
+                    height: 24px;
+                    spacing: 6px;
+                    alignment: start;
+                    Text { text: "Overlay control"; vertical-alignment: center; }
+                    ComboBox {
+                        width: 220px;
+                        model: ["Clear graph each Sample", "Accumulate until clear", "Clear Now"];
+                        current-index: 0;
+                        enabled: false;
+                    }
+                }
+
+                SpectrumPlot {
+                    vertical-stretch: 1;
+                    commands: root.plot-commands;
+                    y-max-label: root.y-max-label;
+                }
+
+                // Firmware/serial status line (bottom-left of graph).
+                Text {
+                    text: root.firmware-text;
+                    font-size: 10px;
+                    color: Theme.disabled-text;
+                }
+            }
+
+            // Right — readout stack.
+            VerticalLayout {
+                horizontal-stretch: 1;
+                width: 300px;
+                spacing: 6px;
+
+                // Sample Type with colour swatch.
+                HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+                    Text { text: "Sample Type"; vertical-alignment: center; width: 90px; }
+                    Rectangle {
+                        width: 20px;
+                        background: root.conc-color;
+                        border-width: 1px;
+                        border-color: Theme.bevel-dark;
+                    }
+                    ComboBox {
+                        horizontal-stretch: 1;
+                        model: ["DNA-50", "RNA-40", "ssDNA-33", "Other"];
+                        current-index <=> root.sample-type-index;
+                        selected(txt) => { root.sample-type-changed(self.current-index); }
+                    }
+                }
+
+                // Sample ID.
+                HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+                    Text { text: "Sample ID"; vertical-alignment: center; width: 90px; }
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        text <=> root.sample-id;
+                        placeholder-text: "sample";
+                    }
+                }
+
+                ReadoutRow { label: "Sample #"; value: "\{root.sample-count}"; }
+
+                // Cursor wavelength + absorbance readout.
+                HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+                    Text { text: "λ"; vertical-alignment: center; width: 20px; }
+                    LineEdit {
+                        width: 60px;
+                        text <=> root.cursor-nm;
+                        edited(v) => { root.cursor-changed(v); }
+                    }
+                    Text { text: "nm  Abs"; vertical-alignment: center; }
+                    SunkenPanel {
+                        horizontal-stretch: 1;
+                        Text {
+                            text: root.cursor-abs-text;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            x: parent.width - self.width - 6px;
+                        }
+                    }
+                }
+
+                ReadoutRow { label: "A-260 10 mm path"; value: root.a260-text; }
+                ReadoutRow { label: "A-280 10 mm path"; value: root.a280-text; }
+                ReadoutRow { label: "260/280"; value: root.ratio-280-text; }
+                ReadoutRow { label: "260/230"; value: root.ratio-230-text; }
+
+                Rectangle { height: 8px; }
+
+                // Headline ng/µL box — colour-keyed to the sample type.
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "ng/µL";
+                        vertical-alignment: center;
+                        width: 90px;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 56px;
+                        background: root.conc-color;
+                        border-width: 2px;
+                        border-color: Theme.bevel-dark;
+                        Text {
+                            text: root.conc-text;
+                            font-size: 22px;
+                            font-weight: 700;
+                            color: #000000;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+    }
+}

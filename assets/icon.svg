@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OpenDrop application icon — PLACEHOLDER.
+  A stylized liquid droplet over a spectrum sweep, evoking a NanoDrop
+  microvolume reading. Replace with final artwork before public release.
+  This scalable SVG is the source of truth; the committed PNGs in this
+  directory are rendered from it (see the Makefile `icons` target).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1b2a"/>
+      <stop offset="1" stop-color="#1b3a5b"/>
+    </linearGradient>
+    <linearGradient id="drop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7fd4ff"/>
+      <stop offset="1" stop-color="#1e88e5"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- spectrum baseline sweep -->
+  <path d="M64 372 C 160 372, 176 232, 256 232 S 352 372, 448 372"
+        fill="none" stroke="#ffd166" stroke-width="14" stroke-linecap="round" opacity="0.85"/>
+  <!-- liquid droplet -->
+  <path d="M256 96 C 256 96, 344 216, 344 296 a 88 88 0 1 1 -176 0 C 168 216, 256 96, 256 96 Z"
+        fill="url(#drop)"/>
+  <!-- specular highlight -->
+  <ellipse cx="224" cy="292" rx="26" ry="40" fill="#ffffff" opacity="0.35"/>
+</svg>
