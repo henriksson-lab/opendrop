@@ -23,15 +23,18 @@ thiserror = "2"
 encoding_rs = "0.8"
 # GUI-only dependencies (pulled in only with the `gui` feature).
 anyhow = { version = "1", optional = true }
-slint = { version = "1.8", optional = true }
+slint = { version = "1.17", optional = true }
+# PDF export of the plot + sample table, and a native "save file" dialog.
+printpdf = { version = "0.7", optional = true }
+rfd = { version = "0.15", optional = true }
 
 [build-dependencies]
-slint-build = { version = "1.8", optional = true }
+slint-build = { version = "1.17", optional = true }
 
 [features]
 default = ["gui"]
 # The desktop GUI + the `opendrop` binary. Disable to use OpenDrop as a library.
-gui = ["dep:slint", "dep:slint-build", "dep:anyhow"]
+gui = ["dep:slint", "dep:slint-build", "dep:anyhow", "dep:printpdf", "dep:rfd"]
 # The real Ocean Optics USB2000 hardware backend (stub until a device capture
 # confirms the byte protocol; see docs/usb_protocol_findings.md).
 usb2000 = []

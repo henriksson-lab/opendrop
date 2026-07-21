@@ -4,17 +4,13 @@ An open-source, cross-platform GUI to control the **NanoDrop ND-1000** microvolu
 
 **Still being developed**
 
-## Screenshots
+## Screenshot
 
-Current state; we will come up with a better user interface. Feature requests are welcome (use github issues)
+A single window: a measurement toolbar, an overlaid spectrum plot, and a table
+of acquired samples. Select rows to overlay their spectra; export the plot and
+table to PDF from the File menu. Feature requests are welcome (use github issues).
 
-### Main menu
-
-![OpenDrop main menu](docs/images/main_menu.png)
-
-### Nucleic Acid measurement
-
-![OpenDrop Nucleic Acid screen](docs/images/nucleic_acid.png)
+![OpenDrop](docs/images/opendrop.png)
 
 ## Building & running
 

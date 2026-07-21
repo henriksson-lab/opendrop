@@ -1,149 +1,390 @@
 //! OpenDrop application entry point.
 //!
-//! Wires the Slint UI (`AppWindow`, see `ui/app.slint`) to a controller that
-//! owns a `Box<dyn Spectrometer>` (the mock backend by default). It handles the
-//! Blank / Measure / Re-blank callbacks, turns each `Spectrum` into an SVG path
-//! for the graph, and computes the Nucleic Acid readouts for display.
+//! Single-window controller: owns a `Box<dyn Spectrometer>` and a list of
+//! `Sample`s, and drives the Slint UI (`AppWindow`, see `ui/app.slint`).
+//!
+//! Workflow: "New sample" creates an *empty* row (named via a dialog) and makes
+//! it the current sample; "Measure" fills — or overwrites — the current sample.
+//! The table is the single source of truth for the readouts; selecting rows
+//! overlays their spectra on the plot. File > Export PDF renders the displayed
+//! plot plus the full table.
+
+mod pdf;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use opendrop::device::mock::MockSpectrometer;
 use opendrop::device::{DeviceError, Spectrometer};
-use opendrop::measure::calc::SampleType;
+use opendrop::measure::calc::{nucleic_acid, NucleicAcidResult, SampleType};
 use opendrop::measure::Spectrum;
-use slint::{Color, SharedString};
+use slint::{Color, ModelRc, VecModel};
 
 slint::include_modules!();
 
-/// Wavelength window shown on the Nucleic Acid graph (nm).
+/// Wavelength window shown on the plot (nm).
 const PLOT_MIN_NM: f64 = 220.0;
 const PLOT_MAX_NM: f64 = 350.0;
 /// Viewbox extents used by the Slint `Path` (see `SpectrumPlot` in the UI).
 const VIEW_W: f64 = 1000.0;
 const VIEW_H: f64 = 1000.0;
 
+/// Per-sample categorical colour key. Mirrors `Theme.series` in `ui/theme.slint`
+/// so a sample's table swatch and its plot trace always match.
+const PALETTE: [(u8, u8, u8); 8] = [
+    (0x4f, 0x6e, 0xf7), // indigo
+    (0x10, 0xb9, 0x81), // emerald
+    (0xf5, 0x9e, 0x0b), // amber
+    (0xef, 0x44, 0x44), // red
+    (0x8b, 0x5c, 0xf6), // violet
+    (0x06, 0xb6, 0xd4), // cyan
+    (0xec, 0x48, 0x99), // pink
+    (0x84, 0xcc, 0x16), // lime
+];
+
+/// A measured spectrum and its cached Nucleic Acid readouts.
+struct Filled {
+    /// Sample-type index used at measure time (0 dsDNA, 1 RNA, 2 ssDNA, 3 Other).
+    type_index: i32,
+    spectrum: Spectrum,
+    result: NucleicAcidResult,
+}
+
+/// One sample row. `filled` is `None` until the sample has been measured, so a
+/// freshly created sample shows as an empty row awaiting a Measure.
+struct Sample {
+    /// Monotonic sample number (also the legend/table `#` and colour key).
+    number: i32,
+    /// User-supplied identifier.
+    id: String,
+    /// Measurement data, or `None` while the sample is still empty.
+    filled: Option<Filled>,
+    /// Whether this sample is currently overlaid on the plot.
+    selected: bool,
+}
+
+impl Sample {
+    fn color(&self) -> (u8, u8, u8) {
+        PALETTE[((self.number - 1).rem_euclid(PALETTE.len() as i32)) as usize]
+    }
+}
+
 /// Mutable application state shared with the Slint callbacks.
 struct AppState {
-    /// The active spectrometer backend (mock by default).
     device: Box<dyn Spectrometer>,
-    /// The most recently measured sample spectrum, if any.
-    last: Option<Spectrum>,
-    /// Running sample counter (increments on each Measure).
-    sample_count: i32,
+    samples: Vec<Sample>,
+    /// Ever-increasing sample counter (never reused, so colours stay stable).
+    next_number: i32,
+    /// The sample number that Measure writes into (the "current" sample).
+    current: Option<i32>,
+}
+
+impl AppState {
+    /// Index of the current sample, if it still exists.
+    fn current_index(&self) -> Option<usize> {
+        let n = self.current?;
+        self.samples.iter().position(|s| s.number == n)
+    }
 }
 
 fn main() -> anyhow::Result<()> {
     let ui = AppWindow::new()?;
 
     let device: Box<dyn Spectrometer> = Box::new(MockSpectrometer::new());
-    let firmware = device.info().config.clone();
+    let info = device.info();
+    ui.set_device_text(format!("{} · {} · {}", info.model, info.serial, info.config).into());
+    ui.set_version(env!("CARGO_PKG_VERSION").into());
+
     let state = Rc::new(RefCell::new(AppState {
         device,
-        last: None,
-        sample_count: 0,
+        samples: Vec::new(),
+        next_number: 1,
+        current: None,
     }));
 
-    // Initial screen state: flat baseline, no readouts yet.
-    ui.set_firmware_text(firmware.into());
-    ui.set_plot_commands(flat_baseline_commands().into());
-    ui.set_y_max_label("1.0".into());
-    clear_readouts(&ui);
+    // Open with a few demo measurements so the UI isn't empty.
+    seed_demo(&state);
+    ui.set_has_blank(true);
+    ui.set_status_text("Loaded demo samples. Select rows to overlay them on the plot.".into());
 
-    // --- Blank (F3): store a reference, clear the screen to a flat line. ---
+    refresh(&ui, &state);
+
+    // --- Blank: record a reference. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
         ui.unwrap().on_blank(move || {
             let ui = ui.unwrap();
-            let mut st = state.borrow_mut();
-            match st.device.blank() {
+            let result = state.borrow_mut().device.blank();
+            match result {
                 Ok(()) => {
-                    st.last = None;
                     ui.set_has_blank(true);
-                    ui.set_plot_commands(flat_baseline_commands().into());
-                    ui.set_y_max_label("1.0".into());
-                    clear_readouts(&ui);
-                    ui.set_status_text(
-                        "Blank measurement complete. Load a sample and click Measure.".into(),
-                    );
+                    ui.set_status_text("Blank recorded. Load a sample and click Measure.".into());
                 }
                 Err(e) => ui.set_status_text(format!("Blank failed: {e}").into()),
             }
         });
     }
 
-    // --- Measure (F1): read a sample against the stored blank. ---
-    {
-        let ui = ui.as_weak();
-        let state = state.clone();
-        ui.unwrap().on_measure(move || {
-            let ui = ui.unwrap();
-            let mut st = state.borrow_mut();
-            match st.device.measure() {
-                Ok(spectrum) => {
-                    st.sample_count += 1;
-                    let count = st.sample_count;
-                    st.last = Some(spectrum);
-                    ui.set_sample_count(count);
-                    ui.set_status_text("Measurement complete.".into());
-                    drop(st);
-                    refresh(&ui, &state);
-                }
-                Err(DeviceError::NoBlank) => {
-                    ui.set_status_text("Make a BLANK measurement first.".into());
-                }
-                Err(e) => ui.set_status_text(format!("Measure failed: {e}").into()),
-            }
-        });
-    }
-
-    // --- Re-blank (F2): new reference, re-referenced against displayed sample. ---
+    // --- Re-blank: record a fresh reference without adding a sample. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
         ui.unwrap().on_reblank(move || {
             let ui = ui.unwrap();
-            let blank_result = {
-                let mut st = state.borrow_mut();
-                st.device.blank()
-            };
-            match blank_result {
+            let result = state.borrow_mut().device.blank();
+            match result {
                 Ok(()) => {
                     ui.set_has_blank(true);
-                    ui.set_status_text("New blank recorded. Existing spectrum unchanged.".into());
-                    refresh(&ui, &state);
+                    ui.set_status_text("New blank recorded.".into());
                 }
                 Err(e) => ui.set_status_text(format!("Re-blank failed: {e}").into()),
             }
         });
     }
 
-    // --- Sample Type changed: recompute concentration / colour key. ---
+    // --- New sample: open the naming dialog with a sensible default. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
-        ui.unwrap().on_sample_type_changed(move |_idx| {
+        ui.unwrap().on_request_new_sample(move || {
             let ui = ui.unwrap();
+            let default = format!("Sample {}", state.borrow().next_number);
+            ui.set_new_sample_name(default.into());
+            ui.set_new_sample_open(true);
+        });
+    }
+
+    // --- Create sample: append an empty, selected row and make it current. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_create_sample(move |name| {
+            let ui = ui.unwrap();
+            let number = {
+                let mut st = state.borrow_mut();
+                let number = st.next_number;
+                st.next_number += 1;
+                let name = name.trim();
+                let id = if name.is_empty() {
+                    format!("Sample {number}")
+                } else {
+                    name.to_string()
+                };
+                for s in &mut st.samples {
+                    s.selected = false;
+                }
+                st.samples.push(Sample {
+                    number,
+                    id,
+                    filled: None,
+                    selected: true,
+                });
+                st.current = Some(number);
+                number
+            };
+            ui.set_new_sample_open(false);
+            ui.set_status_text(
+                format!("Created sample #{number}. Click Measure to fill it in.").into(),
+            );
             refresh(&ui, &state);
         });
     }
 
-    // --- Cursor wavelength changed: update the λ / Abs readout. ---
+    // --- Add constant: open the dialog prefilled with the current value. ---
     {
         let ui = ui.as_weak();
-        let state = state.clone();
-        ui.unwrap().on_cursor_changed(move |_v| {
+        ui.unwrap().on_request_custom(move || {
             let ui = ui.unwrap();
-            update_cursor(&ui, &state);
+            ui.set_custom_input(ui.get_custom_constant());
+            ui.set_custom_open(true);
         });
     }
 
-    // --- Exit from the Main Menu. ---
+    // --- Set constant: validate, store, and activate the Custom type. ---
     {
         let ui = ui.as_weak();
-        ui.unwrap().on_request_exit(move || {
-            let _ = ui;
+        ui.unwrap().on_set_custom(move |value| {
+            let ui = ui.unwrap();
+            match value.trim().parse::<f64>() {
+                Ok(c) if c > 0.0 => {
+                    ui.set_custom_constant(format!("{c}").into());
+                    ui.set_sample_type_index(3);
+                    ui.set_custom_open(false);
+                    ui.set_status_text(format!("Custom constant set to {c} ng/µL·AU.").into());
+                }
+                _ => ui.set_status_text("Enter a positive number for the constant.".into()),
+            }
+        });
+    }
+
+    // --- Measure: fill (overwrite) the current sample against the blank. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_measure(move || {
+            let ui = ui.unwrap();
+            let type_index = ui.get_sample_type_index();
+            let other = ui.get_custom_constant().parse().unwrap_or(30.0);
+            let measured = state.borrow_mut().device.measure();
+            match measured {
+                Ok(spectrum) => {
+                    let result = nucleic_acid(&spectrum, sample_type_for(type_index, other));
+                    let filled = Filled {
+                        type_index,
+                        spectrum,
+                        result,
+                    };
+                    let mut st = state.borrow_mut();
+                    let number = match st.current_index() {
+                        // Overwrite the current sample.
+                        Some(i) => {
+                            st.samples[i].filled = Some(filled);
+                            st.samples[i].selected = true;
+                            st.samples[i].number
+                        }
+                        // No current sample — create one with a default name.
+                        None => {
+                            let number = st.next_number;
+                            st.next_number += 1;
+                            for s in &mut st.samples {
+                                s.selected = false;
+                            }
+                            st.samples.push(Sample {
+                                number,
+                                id: format!("Sample {number}"),
+                                filled: Some(filled),
+                                selected: true,
+                            });
+                            st.current = Some(number);
+                            number
+                        }
+                    };
+                    ui.set_status_text(format!("Measured sample #{number}.").into());
+                    drop(st);
+                    refresh(&ui, &state);
+                }
+                Err(DeviceError::NoBlank) => {
+                    ui.set_status_text("Record a blank first.".into());
+                }
+                Err(e) => ui.set_status_text(format!("Measure failed: {e}").into()),
+            }
+        });
+    }
+
+    // --- Toggle a table row's selection (overlay on/off) + make it current. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_toggle_row(move |i| {
+            let ui = ui.unwrap();
+            {
+                let mut st = state.borrow_mut();
+                let number = st.samples.get(i as usize).map(|s| s.number);
+                if let Some(s) = st.samples.get_mut(i as usize) {
+                    s.selected = !s.selected;
+                }
+                if let Some(n) = number {
+                    st.current = Some(n);
+                }
+            }
+            refresh(&ui, &state);
+        });
+    }
+
+    // --- Rename the currently selected sample(s). ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_rename_selected(move |name| {
+            let ui = ui.unwrap();
+            let name = name.trim();
+            if name.is_empty() {
+                ui.set_status_text("Enter a name to rename the selected sample.".into());
+                return;
+            }
+            let mut renamed = 0;
+            {
+                let mut st = state.borrow_mut();
+                for s in st.samples.iter_mut().filter(|s| s.selected) {
+                    s.id = name.to_string();
+                    renamed += 1;
+                }
+            }
+            if renamed == 0 {
+                ui.set_status_text("Select a sample to rename.".into());
+                return;
+            }
+            ui.set_rename_text("".into());
+            ui.set_status_text(format!("Renamed {renamed} sample(s) to “{name}”.").into());
+            refresh(&ui, &state);
+        });
+    }
+
+    // --- Sample type changed: only affects the next measurement. ---
+    {
+        let ui = ui.as_weak();
+        ui.unwrap().on_sample_type_changed(move |idx| {
+            let ui = ui.unwrap();
+            ui.set_status_text(
+                format!("Sample type set to {} for the next measurement.", type_name(idx)).into(),
+            );
+        });
+    }
+
+    // --- Edit > Remove Selected. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_remove_selected(move || {
+            let ui = ui.unwrap();
+            {
+                let mut st = state.borrow_mut();
+                let before = st.samples.len();
+                st.samples.retain(|s| !s.selected);
+                let removed = before - st.samples.len();
+                // Drop the current pointer if its sample was removed.
+                if let Some(n) = st.current {
+                    if !st.samples.iter().any(|s| s.number == n) {
+                        st.current = None;
+                    }
+                }
+                ui.set_status_text(format!("Removed {removed} sample(s).").into());
+            }
+            refresh(&ui, &state);
+        });
+    }
+
+    // --- Edit > Clear All. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_clear_all(move || {
+            let ui = ui.unwrap();
+            {
+                let mut st = state.borrow_mut();
+                st.samples.clear();
+                st.next_number = 1;
+                st.current = None;
+            }
+            ui.set_status_text("Cleared all samples.".into());
+            refresh(&ui, &state);
+        });
+    }
+
+    // --- File > Export PDF. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_export_pdf(move || {
+            let ui = ui.unwrap();
+            export_pdf(&ui, &state);
+        });
+    }
+
+    // --- File > Quit. ---
+    {
+        ui.on_request_quit(move || {
             let _ = slint::quit_event_loop();
         });
     }
@@ -152,84 +393,210 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Map the Sample Type dropdown index to a core `SampleType`.
-fn sample_type_for(index: i32) -> SampleType {
+/// Populate the sample list with a few demo measurements (via the mock backend)
+/// so the app opens with something to look at. The first two are pre-selected to
+/// show the plot overlay.
+fn seed_demo(state: &Rc<RefCell<AppState>>) {
+    let demos = [
+        ("λ DNA ladder", 0),
+        ("Plasmid miniprep", 0),
+        ("gDNA extract", 0),
+        ("Total RNA", 1),
+    ];
+    let mut st = state.borrow_mut();
+    if st.device.blank().is_err() {
+        return;
+    }
+    for (name, type_index) in demos {
+        let Ok(spectrum) = st.device.measure() else {
+            continue;
+        };
+        let result = nucleic_acid(&spectrum, sample_type_for(type_index, 30.0));
+        let number = st.next_number;
+        st.next_number += 1;
+        st.samples.push(Sample {
+            number,
+            id: name.to_string(),
+            filled: Some(Filled {
+                type_index,
+                spectrum,
+                result,
+            }),
+            selected: false,
+        });
+    }
+    if let Some(s) = st.samples.get_mut(0) {
+        s.selected = true;
+    }
+    if let Some(s) = st.samples.get_mut(1) {
+        s.selected = true;
+    }
+    st.current = st.samples.last().map(|s| s.number);
+}
+
+/// Map the sample-type dropdown index to a core `SampleType`. `other` is the
+/// user-entered ng/µL-per-AU constant used for the "Other" type.
+fn sample_type_for(index: i32, other: f64) -> SampleType {
     match index {
-        0 => SampleType::DsDna,        // DNA-50
-        1 => SampleType::Rna,          // RNA-40
-        2 => SampleType::SsDna,        // ssDNA-33
-        _ => SampleType::Custom(30.0), // Other (default user constant)
+        0 => SampleType::DsDna,
+        1 => SampleType::Rna,
+        2 => SampleType::SsDna,
+        _ => SampleType::Custom(other),
     }
 }
 
-/// Colour key for the ng/µL box and the Sample Type swatch (mirrors theme.slint).
-fn color_for(index: i32) -> Color {
+/// Short label for a sample-type index (used in the table + status line).
+fn type_name(index: i32) -> &'static str {
     match index {
-        0 => Color::from_rgb_u8(0x45, 0xb5, 0x45), // green
-        1 => Color::from_rgb_u8(0xe0, 0xa0, 0x20), // gold
-        2 => Color::from_rgb_u8(0x40, 0xb0, 0xc8), // cyan
-        _ => Color::from_rgb_u8(0xb8, 0xb0, 0xd8), // lavender
+        0 => "dsDNA",
+        1 => "RNA",
+        2 => "ssDNA",
+        _ => "Other",
     }
 }
 
-/// Recompute every readout + the graph from the last measured spectrum and the
-/// currently-selected sample type, and push them into the UI.
+/// Rebuild both the table model and the plot from the current sample list.
 fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
-    let idx = ui.get_sample_type_index();
-    ui.set_conc_color(color_for(idx));
 
-    let Some(spectrum) = st.last.as_ref() else {
-        clear_readouts(ui);
-        return;
+    // ---- Table rows ----
+    let dash = "—".to_string();
+    let rows: Vec<SampleRow> = st
+        .samples
+        .iter()
+        .map(|s| {
+            let (r, g, b) = s.color();
+            let (type_name_s, a260, a280, r280, r230, conc) = match &s.filled {
+                Some(f) => (
+                    type_name(f.type_index).to_string(),
+                    format!("{:.3}", f.result.a260),
+                    format!("{:.3}", f.result.a280),
+                    fmt_ratio(f.result.ratio_260_280),
+                    fmt_ratio(f.result.ratio_260_230),
+                    format!("{:.1}", f.result.concentration_ng_per_ul),
+                ),
+                None => (
+                    dash.clone(),
+                    dash.clone(),
+                    dash.clone(),
+                    dash.clone(),
+                    dash.clone(),
+                    dash.clone(),
+                ),
+            };
+            SampleRow {
+                number: s.number,
+                id: s.id.clone().into(),
+                type_name: type_name_s.into(),
+                a260: a260.into(),
+                a280: a280.into(),
+                r260_280: r280.into(),
+                r260_230: r230.into(),
+                conc: conc.into(),
+                color: Color::from_rgb_u8(r, g, b),
+                selected: s.selected,
+            }
+        })
+        .collect();
+    ui.set_samples(ModelRc::new(VecModel::from(rows)));
+
+    // ---- Plot traces ----
+    let displayed = displayed_indices(&st.samples);
+    let (traces, y_max) = build_traces(&st.samples, &displayed);
+    ui.set_traces(ModelRc::new(VecModel::from(traces)));
+    ui.set_y_max_label(format!("{y_max:.1}").into());
+}
+
+/// Indices of the samples shown on the plot: the selected *filled* ones, or —
+/// when none qualify — the most recently measured sample. Empty (unmeasured)
+/// samples are never plotted.
+fn displayed_indices(samples: &[Sample]) -> Vec<usize> {
+    let selected: Vec<usize> = samples
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.selected && s.filled.is_some())
+        .map(|(i, _)| i)
+        .collect();
+    if !selected.is_empty() {
+        return selected;
+    }
+    samples
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, s)| s.filled.is_some())
+        .map(|(i, _)| vec![i])
+        .unwrap_or_default()
+}
+
+/// Build the overlaid plot traces (SVG paths in a 0..1000 viewbox) for the
+/// displayed samples, sharing a common auto-scaled Y axis. Every index in
+/// `displayed` is guaranteed to be a filled sample. Returns the traces and the
+/// Y-axis maximum used.
+fn build_traces(samples: &[Sample], displayed: &[usize]) -> (Vec<PlotTrace>, f64) {
+    if displayed.is_empty() {
+        return (Vec::new(), 1.0);
+    }
+
+    // Shared Y scaling across every displayed spectrum in the plotted window.
+    let mut max_a = f64::MIN;
+    let mut min_a = f64::MAX;
+    for &i in displayed {
+        for (wl, a) in filled_spectrum(&samples[i]).points() {
+            if (PLOT_MIN_NM..=PLOT_MAX_NM).contains(&wl) {
+                max_a = max_a.max(a);
+                min_a = min_a.min(a);
+            }
+        }
+    }
+    let top = if !max_a.is_finite() || max_a <= 0.0 {
+        1.0
+    } else {
+        max_a * 1.1
     };
+    let bottom = min_a.min(0.0);
+    let span = (top - bottom).max(1e-6);
 
-    // All readout math lives in `nanodrop-core` (unit-tested against the
-    // constants recovered from the original software). The core baseline-
-    // corrects at 340 nm and returns 0.0 for undefined purity ratios.
-    let sample_type = sample_type_for(idx);
-    let r = opendrop::measure::calc::nucleic_acid(spectrum, sample_type);
-
-    ui.set_a260_text(format!("{:.3}", r.a260).into());
-    ui.set_a280_text(format!("{:.3}", r.a280).into());
-    ui.set_ratio_280_text(fmt_ratio(r.ratio_260_280).into());
-    ui.set_ratio_230_text(fmt_ratio(r.ratio_260_230).into());
-    ui.set_conc_text(format!("{:.1}", r.concentration_ng_per_ul).into());
-
-    let (commands, ymax) = build_plot_commands(spectrum);
-    ui.set_plot_commands(commands.into());
-    ui.set_y_max_label(format!("{ymax:.1}").into());
-
-    drop(st);
-    update_cursor(ui, state);
+    let traces = displayed
+        .iter()
+        .map(|&i| {
+            let s = &samples[i];
+            let (r, g, b) = s.color();
+            PlotTrace {
+                commands: trace_commands(filled_spectrum(s), bottom, span).into(),
+                color: Color::from_rgb_u8(r, g, b),
+                label: format!("#{}  {}", s.number, s.id).into(),
+            }
+        })
+        .collect();
+    (traces, top)
 }
 
-/// Update just the λ / Abs cursor readout from the last spectrum.
-fn update_cursor(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let st = state.borrow();
-    let nm: f64 = ui.get_cursor_nm().parse().unwrap_or(230.0);
-    let text = match st.last.as_ref() {
-        Some(spec) => format!("{:.3}", spec.absorbance_at(nm)),
-        None => "—".to_string(),
-    };
-    ui.set_cursor_abs_text(text.into());
+/// The spectrum of a sample known to be filled (panics otherwise — callers only
+/// pass filled samples).
+fn filled_spectrum(sample: &Sample) -> &Spectrum {
+    &sample.filled.as_ref().expect("filled sample").spectrum
 }
 
-/// Reset all numeric readouts to placeholders.
-fn clear_readouts(ui: &AppWindow) {
-    let dash: SharedString = "—".into();
-    ui.set_a260_text(dash.clone());
-    ui.set_a280_text(dash.clone());
-    ui.set_ratio_280_text(dash.clone());
-    ui.set_ratio_230_text(dash.clone());
-    ui.set_conc_text(dash.clone());
-    ui.set_cursor_abs_text(dash);
-    ui.set_conc_color(color_for(ui.get_sample_type_index()));
+/// SVG path over the 220–350 nm window for one spectrum, given the shared
+/// baseline and span used for Y scaling.
+fn trace_commands(spectrum: &Spectrum, bottom: f64, span: f64) -> String {
+    let mut cmds = String::new();
+    let mut started = false;
+    for (wl, a) in spectrum.points() {
+        if !(PLOT_MIN_NM..=PLOT_MAX_NM).contains(&wl) {
+            continue;
+        }
+        let x = (wl - PLOT_MIN_NM) / (PLOT_MAX_NM - PLOT_MIN_NM) * VIEW_W;
+        let y = ((1.0 - (a - bottom) / span) * VIEW_H).clamp(0.0, VIEW_H);
+        cmds.push_str(if started { "L " } else { "M " });
+        cmds.push_str(&format!("{x:.1} {y:.1} "));
+        started = true;
+    }
+    cmds
 }
 
-/// Format a purity ratio. `nanodrop-core` returns `0.0` for an undefined ratio
-/// (zero denominator); show that — and any non-finite value — as a blank dash,
-/// matching the original's empty readout.
+/// Format a purity ratio; `nucleic_acid` returns `0.0` for an undefined ratio.
 fn fmt_ratio(v: f64) -> String {
     if v.is_finite() && v != 0.0 {
         format!("{v:.2}")
@@ -238,38 +605,73 @@ fn fmt_ratio(v: f64) -> String {
     }
 }
 
-/// Build the SVG path (in a 0..1000 viewbox) tracing the 220–350 nm region of a
-/// spectrum, auto-scaling Y. Returns the path string and the Y-axis max used.
-fn build_plot_commands(spectrum: &Spectrum) -> (String, f64) {
-    // Collect (wavelength, absorbance) within the plotted window.
-    let pts: Vec<(f64, f64)> = spectrum
-        .points()
-        .filter(|(wl, _)| (PLOT_MIN_NM..=PLOT_MAX_NM).contains(wl))
+/// File > Export PDF: prompt for a path, then render the displayed plot + full
+/// sample table to a PDF.
+fn export_pdf(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let path = match rfd::FileDialog::new()
+        .set_title("Export PDF")
+        .set_file_name("opendrop-report.pdf")
+        .add_filter("PDF", &["pdf"])
+        .save_file()
+    {
+        Some(p) => p,
+        None => return, // cancelled
+    };
+
+    let st = state.borrow();
+    let displayed = displayed_indices(&st.samples);
+
+    let traces: Vec<pdf::PdfTrace> = displayed
+        .iter()
+        .map(|&i| {
+            let s = &st.samples[i];
+            pdf::PdfTrace {
+                color: s.color(),
+                label: format!("#{}  {}", s.number, s.id),
+                points: filled_spectrum(s)
+                    .points()
+                    .filter(|(wl, _)| (PLOT_MIN_NM..=PLOT_MAX_NM).contains(wl))
+                    .collect(),
+            }
+        })
         .collect();
-    if pts.is_empty() {
-        return (flat_baseline_commands(), 1.0);
+
+    let rows: Vec<Vec<String>> = st
+        .samples
+        .iter()
+        .map(|s| {
+            let (ty, a260, a280, r280, r230, conc) = match &s.filled {
+                Some(f) => (
+                    type_name(f.type_index).to_string(),
+                    format!("{:.3}", f.result.a260),
+                    format!("{:.3}", f.result.a280),
+                    fmt_ratio(f.result.ratio_260_280),
+                    fmt_ratio(f.result.ratio_260_230),
+                    format!("{:.1}", f.result.concentration_ng_per_ul),
+                ),
+                None => (
+                    "—".into(),
+                    "—".into(),
+                    "—".into(),
+                    "—".into(),
+                    "—".into(),
+                    "—".into(),
+                ),
+            };
+            vec![s.number.to_string(), s.id.clone(), ty, a260, a280, r280, r230, conc]
+        })
+        .collect();
+
+    let report = pdf::Report {
+        device_text: ui.get_device_text().to_string(),
+        traces,
+        x_range: (PLOT_MIN_NM, PLOT_MAX_NM),
+        rows,
+    };
+    drop(st);
+
+    match pdf::export(&path, &report) {
+        Ok(()) => ui.set_status_text(format!("Exported PDF to {}", path.display()).into()),
+        Err(e) => ui.set_status_text(format!("PDF export failed: {e}").into()),
     }
-
-    let max_a = pts.iter().fold(f64::MIN, |m, &(_, a)| m.max(a));
-    let min_a = pts.iter().fold(f64::MAX, |m, &(_, a)| m.min(a));
-
-    // Auto-scale: top a little above the peak (min 1.0), bottom at min(0, data).
-    let top = if max_a <= 0.0 { 1.0 } else { max_a * 1.1 };
-    let bottom = min_a.min(0.0);
-    let span = (top - bottom).max(1e-6);
-
-    let mut cmds = String::with_capacity(pts.len() * 14);
-    for (i, &(wl, a)) in pts.iter().enumerate() {
-        let x = (wl - PLOT_MIN_NM) / (PLOT_MAX_NM - PLOT_MIN_NM) * VIEW_W;
-        let y = (1.0 - (a - bottom) / span) * VIEW_H;
-        let y = y.clamp(0.0, VIEW_H);
-        cmds.push_str(if i == 0 { "M " } else { "L " });
-        cmds.push_str(&format!("{x:.1} {y:.1} "));
-    }
-    (cmds, top)
-}
-
-/// A flat baseline near the bottom of the plot (used for a fresh blank / reset).
-fn flat_baseline_commands() -> String {
-    format!("M 0 {y:.1} L {w:.1} {y:.1}", y = VIEW_H - 4.0, w = VIEW_W)
 }

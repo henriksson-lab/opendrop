@@ -1,97 +1,266 @@
-// OpenDrop — root window and shared theme.
+// OpenDrop — single-window application shell.
 //
 // `AppWindow` stays the exported root so `include_modules!()` in main.rs keeps
-// working. It owns the whole application state (properties driven by the Rust
-// controller) and switches between the Main Menu launcher and the Nucleic Acid
-// measurement screen.
+// working. It owns all view state (driven by the Rust controller) and lays out,
+// top to bottom: a native menu bar, a compact measurement toolbar, the overlaid
+// spectrum plot, and the samples table. The About dialog is an overlay toggled
+// entirely in the UI.
 
-import { MainMenu } from "main_menu.slint";
-import { NucleicAcidScreen } from "nucleic_acid.slint";
+import { ComboBox, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { Button, Card } from "widgets.slint";
+import { SpectrumPlot } from "plot.slint";
+import { SamplesTable } from "samples_table.slint";
+import { AboutDialog } from "about.slint";
+import { InputDialog } from "input_dialog.slint";
+import { PlotTrace, SampleRow } from "types.slint";
+
+export { PlotTrace, SampleRow }
 
 export component AppWindow inherits Window {
-    title: "NanoDrop 1000 3.8 — OpenDrop";
-    default-font-size: 12px;
-    background: Theme.window-face;
-    // Designed for the original ~1024x768; keep a fixed-ish comfortable size.
-    preferred-width: 1024px;
-    preferred-height: 700px;
-    min-width: 900px;
-    min-height: 640px;
+    title: "OpenDrop";
+    default-font-size: 13px;
+    background: Theme.window-bg;
+    preferred-width: 1120px;
+    preferred-height: 760px;
+    min-width: 940px;
+    min-height: 620px;
 
-    // 0 = Main Menu, 1 = Nucleic Acid screen.
-    in-out property <int> page: 0;
-
-    // ---- Nucleic Acid screen state (driven by the Rust controller) ----
-    in property <string> plot-commands;
+    // ---- View state (driven by the Rust controller) ----
+    in property <[PlotTrace]> traces;
     in property <string> y-max-label: "1.0";
-    in property <string> a260-text: "—";
-    in property <string> a280-text: "—";
-    in property <string> ratio-280-text: "—";
-    in property <string> ratio-230-text: "—";
-    in property <string> conc-text: "—";
-    in property <color> conc-color: Theme.dna-color;
+    in property <[SampleRow]> samples;
     in property <bool> has-blank: false;
-    in property <int> sample-count: 0;
-    in property <string> status-text: "Load a blank and click Blank to begin.";
-    in property <string> firmware-text: "";
+    in property <string> status-text: "Click Blank to record a reference, then Measure.";
+    in property <string> device-text: "";
+    in property <string> version: "0.1.0";
     in-out property <int> sample-type-index: 0;
-    in-out property <string> sample-id: "";
-    in-out property <string> cursor-nm: "230";
-    in property <string> cursor-abs-text: "—";
+    // Custom ng/µL-per-AU constant shown as the 4th "Custom (…)" type.
+    in-out property <string> custom-constant: "30";
+    in-out property <string> rename-text: "";
+    // New-sample dialog state (opened/prefilled by the controller).
+    in-out property <bool> new-sample-open: false;
+    in-out property <string> new-sample-name: "";
+    // Add-custom dialog state.
+    in-out property <bool> custom-open: false;
+    in-out property <string> custom-input: "";
 
     // ---- Callbacks handled in Rust ----
     callback measure();
     callback blank();
     callback reblank();
     callback sample-type-changed(int);
-    callback cursor-changed(string);
-    callback request-exit();
+    callback toggle-row(int);
+    callback rename-selected(string);
+    callback request-new-sample();
+    callback create-sample(string);
+    callback request-custom();
+    callback set-custom(string);
+    callback export-pdf();
+    callback remove-selected();
+    callback clear-all();
+    callback request-quit();
 
-    // Coming-soon banner text for not-yet-implemented modules.
-    property <string> coming-soon: "";
+    // About overlay is UI-local state.
+    property <bool> about-open: false;
 
-    if page == 0: MainMenu {
-        width: 100%;
-        height: 100%;
-        coming-soon: root.coming-soon;
-        // Only Nucleic Acid is functional; index 0 in the module grid.
-        open-module(index, name) => {
-            if index == 0 {
-                root.page = 1;
-                root.coming-soon = "";
-            } else {
-                root.coming-soon = name + " module is not implemented yet.";
+    MenuBar {
+        Menu {
+            title: "File";
+            MenuItem {
+                title: "Export PDF…";
+                activated => { root.export-pdf(); }
+            }
+            MenuSeparator {}
+            MenuItem {
+                title: "Quit";
+                activated => { root.request-quit(); }
             }
         }
-        request-exit => { root.request-exit(); }
+        Menu {
+            title: "Edit";
+            MenuItem {
+                title: "Remove Selected Samples";
+                activated => { root.remove-selected(); }
+            }
+            MenuItem {
+                title: "Clear All Samples";
+                activated => { root.clear-all(); }
+            }
+        }
+        Menu {
+            title: "Help";
+            MenuItem {
+                title: "About OpenDrop";
+                activated => { root.about-open = true; }
+            }
+        }
     }
 
-    if page == 1: NucleicAcidScreen {
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        // ---- Measurement toolbar ----
+        Card {
+            height: 58px;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 10px;
+                alignment: start;
+
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 148px;
+                        model: [
+                            "dsDNA (50)",
+                            "RNA (40)",
+                            "ssDNA (33)",
+                            "Custom (" + root.custom-constant + ")",
+                        ];
+                        current-index <=> root.sample-type-index;
+                        selected(txt) => { root.sample-type-changed(self.current-index); }
+                    }
+                }
+
+                // Set the custom conversion constant via a dialog.
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "Add constant";
+                        clicked => { root.request-custom(); }
+                    }
+                }
+
+                // Action buttons, vertically centred.
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Button {
+                            text: "New sample";
+                            clicked => { root.request-new-sample(); }
+                        }
+                        Button {
+                            text: "Blank";
+                            clicked => { root.blank(); }
+                        }
+                        Button {
+                            text: "Re-blank";
+                            enabled: root.has-blank;
+                            clicked => { root.reblank(); }
+                        }
+                        Button {
+                            text: "Measure";
+                            primary: true;
+                            enabled: root.has-blank;
+                            clicked => { root.measure(); }
+                        }
+                    }
+                }
+
+                // Status message, right of the buttons.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    min-width: 60px;
+                    Text {
+                        text: root.status-text;
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: parent.width - 8px;
+                        height: parent.height;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // ---- Spectrum plot ----
+        Card {
+            vertical-stretch: 3;
+            VerticalLayout {
+                padding: 12px;
+                SpectrumPlot {
+                    traces: root.traces;
+                    y-max-label: root.y-max-label;
+                }
+            }
+        }
+
+        // ---- Samples table ----
+        Card {
+            vertical-stretch: 4;
+            VerticalLayout {
+                padding: 8px;
+                SamplesTable {
+                    rows: root.samples;
+                    toggle-row(i) => { root.toggle-row(i); }
+                }
+            }
+        }
+
+        // ---- Selection controls ----
+        HorizontalLayout {
+            height: 32px;
+            spacing: 8px;
+            alignment: start;
+            Text {
+                text: "Rename selected:";
+                font-size: 12px;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+            }
+            LineEdit {
+                width: 240px;
+                placeholder-text: "new sample ID";
+                text <=> root.rename-text;
+                accepted => { root.rename-selected(root.rename-text); }
+            }
+            Button {
+                text: "Rename";
+                clicked => { root.rename-selected(root.rename-text); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Delete Selected";
+                clicked => { root.remove-selected(); }
+            }
+        }
+    }
+
+    // ---- New-sample overlay ----
+    if root.new-sample-open: InputDialog {
         width: 100%;
         height: 100%;
-        plot-commands: root.plot-commands;
-        y-max-label: root.y-max-label;
-        a260-text: root.a260-text;
-        a280-text: root.a280-text;
-        ratio-280-text: root.ratio-280-text;
-        ratio-230-text: root.ratio-230-text;
-        conc-text: root.conc-text;
-        conc-color: root.conc-color;
-        has-blank: root.has-blank;
-        sample-count: root.sample-count;
-        status-text: root.status-text;
-        firmware-text: root.firmware-text;
-        sample-type-index <=> root.sample-type-index;
-        sample-id <=> root.sample-id;
-        cursor-nm <=> root.cursor-nm;
-        cursor-abs-text: root.cursor-abs-text;
+        heading: "New sample";
+        prompt: "Name for the new sample";
+        ok-text: "Create";
+        value <=> root.new-sample-name;
+        accept => { root.create-sample(root.new-sample-name); }
+        cancel => { root.new-sample-open = false; }
+    }
 
-        measure => { root.measure(); }
-        blank => { root.blank(); }
-        reblank => { root.reblank(); }
-        sample-type-changed(i) => { root.sample-type-changed(i); }
-        cursor-changed(v) => { root.cursor-changed(v); }
-        exit-to-menu => { root.page = 0; }
+    // ---- Add-constant overlay ----
+    if root.custom-open: InputDialog {
+        width: 100%;
+        height: 100%;
+        heading: "Add constant";
+        prompt: "Custom conversion constant (ng/µL per A260 absorbance unit)";
+        ok-text: "Set";
+        value <=> root.custom-input;
+        accept => { root.set-custom(root.custom-input); }
+        cancel => { root.custom-open = false; }
+    }
+
+    // ---- About overlay ----
+    if root.about-open: AboutDialog {
+        width: 100%;
+        height: 100%;
+        version: root.version;
+        close => { root.about-open = false; }
     }
 }

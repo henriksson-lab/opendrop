@@ -1,0 +1,144 @@
+// Spectral plot: one or more overlaid absorbance traces (built in Rust as SVG
+// paths in a 0..1000 viewbox), a light grid with wavelength ticks, a y-axis
+// max label, and a colour-keyed legend of the displayed samples.
+
+import { Theme } from "theme.slint";
+import { PlotTrace } from "types.slint";
+
+export component SpectrumPlot inherits Rectangle {
+    in property <[PlotTrace]> traces;
+    in property <string> y-max-label: "1.0";
+
+    // 220..350 nm tick positions as fractions of the plot width.
+    property <[{nm: string, frac: float}]> ticks: [
+        { nm: "220", frac: 0.0 },
+        { nm: "240", frac: 0.153 },
+        { nm: "260", frac: 0.307 },
+        { nm: "280", frac: 0.461 },
+        { nm: "300", frac: 0.615 },
+        { nm: "320", frac: 0.769 },
+        { nm: "340", frac: 0.923 },
+        { nm: "350", frac: 1.0 },
+    ];
+
+    HorizontalLayout {
+        spacing: 4px;
+
+        // Y-axis: max label at the top, rotated title, zero at the bottom.
+        VerticalLayout {
+            width: 52px;
+            Text {
+                text: root.y-max-label;
+                font-size: 11px;
+                color: Theme.text-muted;
+                horizontal-alignment: right;
+                width: 100%;
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                Text {
+                    text: "10 mm Absorbance";
+                    font-size: 11px;
+                    color: Theme.text-muted;
+                    transform-rotation: -90deg;
+                }
+            }
+            Text {
+                text: "0.0";
+                font-size: 11px;
+                color: Theme.text-muted;
+                horizontal-alignment: right;
+                width: 100%;
+            }
+            Rectangle { height: 30px; }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+
+            plot := Rectangle {
+                vertical-stretch: 1;
+                background: Theme.plot-bg;
+                border-radius: Theme.radius-sm;
+                border-width: 1px;
+                border-color: Theme.border;
+                clip: true;
+
+                // Vertical gridlines at each tick.
+                for t in root.ticks: Rectangle {
+                    x: t.frac * (parent.width - 2px) + 1px;
+                    y: 1px;
+                    width: 1px;
+                    height: parent.height - 2px;
+                    background: Theme.plot-grid;
+                }
+
+                // Overlaid traces (one Path per displayed sample). `fit: fill`
+                // stretches the square 0..1000 viewbox to the plot's actual
+                // (wide) size instead of letterboxing it into a centred square.
+                for tr in root.traces: Path {
+                    x: 1px; y: 1px;
+                    width: parent.width - 2px;
+                    height: parent.height - 2px;
+                    viewbox-x: 0; viewbox-y: 0;
+                    viewbox-width: 1000; viewbox-height: 1000;
+                    fit: fill;
+                    commands: tr.commands;
+                    stroke: tr.color;
+                    stroke-width: 2px;
+                    fill: transparent;
+                }
+
+                // Empty-state hint.
+                if root.traces.length == 0: Text {
+                    text: "No sample displayed — measure, or select rows below to overlay.";
+                    color: Theme.text-faint;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 80%;
+                    wrap: word-wrap;
+                }
+            }
+
+            // X-axis tick labels + title.
+            Rectangle {
+                height: 14px;
+                for t in root.ticks: Text {
+                    x: t.frac * parent.width - self.width / 2;
+                    text: t.nm;
+                    font-size: 11px;
+                    color: Theme.text-muted;
+                }
+            }
+            Text {
+                text: "Wavelength (nm)";
+                font-size: 11px;
+                color: Theme.text-muted;
+                horizontal-alignment: center;
+            }
+
+            // Legend — colour swatch + label per displayed trace.
+            HorizontalLayout {
+                height: root.traces.length > 0 ? 18px : 0px;
+                spacing: 14px;
+                alignment: center;
+                for tr in root.traces: HorizontalLayout {
+                    spacing: 5px;
+                    Rectangle {
+                        width: 12px; height: 12px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 3px;
+                        background: tr.color;
+                    }
+                    Text {
+                        text: tr.label;
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,47 +1,42 @@
-// Reusable Win32-style widgets: a 3-D beveled button and a sunken panel.
+// Reusable modern flat widgets: a filled/soft push button and a card surface.
 
 import { Theme } from "theme.slint";
 
-// A classic grey 3-D beveled push button. Draws raised bevels that invert while
-// pressed, matching the ND-1000 toolbar/menu buttons.
-export component BevelButton inherits Rectangle {
+// A flat push button. `primary` fills with the accent colour; otherwise it is a
+// soft tinted/neutral button. Hover and press states shift the background.
+export component Button inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
-    in property <length> font-size: 12px;
-    in property <bool> bold: false;
+    in property <bool> primary: false;
+    in property <length> font-size: 13px;
     callback clicked();
 
-    background: Theme.control-face;
+    property <bool> hovered: touch.has-hover && enabled;
     property <bool> pressed: touch.pressed && enabled;
 
-    // Raised (or, when pressed, sunken) bevel: light top/left, dark bottom/right.
-    Rectangle {
-        x: 0; y: 0; width: 100%; height: 2px;
-        background: root.pressed ? Theme.bevel-dark : Theme.bevel-light;
-    }
-    Rectangle {
-        x: 0; y: 0; width: 2px; height: 100%;
-        background: root.pressed ? Theme.bevel-dark : Theme.bevel-light;
-    }
-    Rectangle {
-        x: 0; y: parent.height - 2px; width: 100%; height: 2px;
-        background: root.pressed ? Theme.bevel-light : Theme.bevel-darker;
-    }
-    Rectangle {
-        x: parent.width - 2px; y: 0; width: 2px; height: 100%;
-        background: root.pressed ? Theme.bevel-light : Theme.bevel-darker;
-    }
+    height: 32px;
+    // Size to the label so text never clips; 28px of horizontal breathing room.
+    min-width: label.preferred-width + 28px;
+    border-radius: Theme.radius-sm;
 
-    Text {
-        x: root.pressed ? (parent.width - self.width) / 2 + 1px : (parent.width - self.width) / 2;
-        y: root.pressed ? (parent.height - self.height) / 2 + 1px : (parent.height - self.height) / 2;
+    background: !enabled
+        ? Theme.surface-alt
+        : primary
+            ? (pressed ? Theme.accent-press : hovered ? Theme.accent-hover : Theme.accent)
+            : (pressed ? Theme.border-strong : hovered ? Theme.surface-alt : Theme.surface);
+    border-width: primary ? 0px : 1px;
+    border-color: Theme.border-strong;
+
+    label := Text {
         text: root.text;
-        color: root.enabled ? Theme.text-color : Theme.disabled-text;
         font-size: root.font-size;
-        font-weight: root.bold ? 700 : 400;
+        font-weight: 600;
         horizontal-alignment: center;
-        wrap: word-wrap;
-        width: parent.width - 8px;
+        vertical-alignment: center;
+        width: 100%;
+        color: !root.enabled
+            ? Theme.text-faint
+            : root.primary ? Theme.accent-text : Theme.text;
     }
 
     touch := TouchArea {
@@ -51,25 +46,12 @@ export component BevelButton inherits Rectangle {
     }
 }
 
-// A sunken (etched-in) panel — light bottom/right, dark top/left — used to frame
-// readouts and the plot area.
-export component SunkenPanel inherits Rectangle {
-    background: white;
-    Rectangle {
-        x: 0; y: 0; width: 100%; height: 1px;
-        background: Theme.bevel-dark;
-    }
-    Rectangle {
-        x: 0; y: 0; width: 1px; height: 100%;
-        background: Theme.bevel-dark;
-    }
-    Rectangle {
-        x: 0; y: parent.height - 1px; width: 100%; height: 1px;
-        background: Theme.bevel-light;
-    }
-    Rectangle {
-        x: parent.width - 1px; y: 0; width: 1px; height: 100%;
-        background: Theme.bevel-light;
-    }
+// A plain rounded surface with a hairline border used to frame the plot and
+// the table.
+export component Card inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
     @children
 }

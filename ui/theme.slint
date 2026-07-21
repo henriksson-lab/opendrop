@@ -1,31 +1,49 @@
-// Shared visual tokens reproducing the ND-1000's Windows-2000/XP grey look:
-// a beige-grey window face, 3-D beveled buttons, black text, MS-Sans-Serif-ish
-// font. Colours also carry the sample-type "colour key".
+// Modern, flat visual language for OpenDrop.
+//
+// Replaces the original Windows-2000 grey/bevel look with a clean neutral
+// surface, a single indigo accent, and a categorical palette used to colour
+// each acquired sample consistently in both the plot legend and the table.
 
 export global Theme {
-    // Classic Win32 window / control face and 3-D bevel edges.
-    out property <color> window-face: #ece9d8;      // XP "3D face"
-    out property <color> control-face: #d4d0c8;     // button grey
-    out property <color> bevel-light: #ffffff;
-    out property <color> bevel-dark: #808080;
-    out property <color> bevel-darker: #404040;
-    out property <color> text-color: #000000;
-    out property <color> disabled-text: #808080;
+    // --- Surfaces ---------------------------------------------------------
+    out property <color> window-bg: #f5f6f8;      // app background
+    out property <color> surface: #ffffff;        // cards / panels
+    out property <color> surface-alt: #eef0f4;    // subtle zebra / hover
+    out property <color> border: #dce0e6;         // hairline separators
+    out property <color> border-strong: #c3c9d2;
 
-    // Plot area.
+    // --- Text -------------------------------------------------------------
+    out property <color> text: #1c2430;           // primary
+    out property <color> text-muted: #5b6675;      // secondary / labels
+    out property <color> text-faint: #9aa4b2;      // disabled / hints
+
+    // --- Accent (interactive) --------------------------------------------
+    out property <color> accent: #4f6ef7;          // indigo
+    out property <color> accent-hover: #4460ea;
+    out property <color> accent-press: #3a53d6;
+    out property <color> accent-text: #ffffff;
+    out property <color> accent-soft: #e9edfe;     // tinted button bg
+
+    // --- Plot -------------------------------------------------------------
     out property <color> plot-bg: #ffffff;
-    out property <color> plot-grid: #d0d8c8;
-    out property <color> plot-axis: #000000;
-    out property <color> trace: #000000;
+    out property <color> plot-grid: #eceff3;
+    out property <color> plot-axis: #b6bdc8;
 
-    // Header / title accents (XP blue).
-    out property <color> accent: #0a5ad0;
+    // --- Categorical palette (per-sample colour key) ----------------------
+    // Cycled by sample index; shared by the plot trace and the table swatch.
+    out property <[color]> series: [
+        #4f6ef7,  // indigo
+        #10b981,  // emerald
+        #f59e0b,  // amber
+        #ef4444,  // red
+        #8b5cf6,  // violet
+        #06b6d4,  // cyan
+        #ec4899,  // pink
+        #84cc16,  // lime
+    ];
 
-    // Sample-type colour key (used for the Sample Type swatch + ng/µL box).
-    out property <color> dna-color: #45b545;    // DNA-50, green
-    out property <color> rna-color: #e0a020;    // RNA-40, gold
-    out property <color> ssdna-color: #40b0c8;  // ssDNA-33, cyan
-    out property <color> other-color: #b8b0d8;  // Other, lavender-grey
-
-    out property <length> pad: 6px;
+    // --- Spacing / radii --------------------------------------------------
+    out property <length> radius: 8px;
+    out property <length> radius-sm: 5px;
+    out property <length> pad: 10px;
 }

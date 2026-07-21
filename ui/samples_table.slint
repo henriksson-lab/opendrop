@@ -1,0 +1,128 @@
+// Samples table: every acquired measurement as a row. Clicking a row toggles
+// its selection, which the controller uses to overlay that sample on the plot.
+// This is the single place all measurement values are shown.
+
+import { Theme } from "theme.slint";
+import { SampleRow } from "types.slint";
+
+// One header/data cell. Numeric columns are right-aligned and fixed-width; the
+// ID column stretches.
+component Cell inherits Rectangle {
+    in property <string> text;
+    in property <bool> header: false;
+    in property <bool> stretch: false;
+    in property <length> col-width: 84px;
+    in property <color> text-color: Theme.text;
+
+    // Note: inside a layout an explicit `width` is a *fixed* constraint, which
+    // would collapse the stretch column — drive sizing via min/max-width instead.
+    horizontal-stretch: stretch ? 1 : 0;
+    min-width: stretch ? 120px : col-width;
+    max-width: stretch ? 100000px : col-width;
+    Text {
+        text: root.text;
+        color: root.header ? Theme.text-muted : root.text-color;
+        font-size: root.header ? 11px : 12px;
+        font-weight: root.header ? 600 : 400;
+        vertical-alignment: center;
+        horizontal-alignment: root.stretch ? left : right;
+        x: root.stretch ? 4px : 0px;
+        width: root.stretch ? parent.width - 8px : parent.width - 10px;
+        overflow: elide;
+    }
+}
+
+export component SamplesTable inherits Rectangle {
+    in property <[SampleRow]> rows;
+    callback toggle-row(int);
+
+    VerticalLayout {
+        // --- Header ---
+        Rectangle {
+            height: 30px;
+            background: Theme.surface-alt;
+            border-radius: Theme.radius-sm;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 6px;
+                Cell { col-width: 40px; header: true; text: ""; }
+                Cell { col-width: 34px; header: true; text: "#"; }
+                Cell { stretch: true; header: true; text: "Sample ID"; }
+                Cell { col-width: 74px; header: true; text: "Type"; }
+                Cell { col-width: 74px; header: true; text: "A260"; }
+                Cell { col-width: 74px; header: true; text: "A280"; }
+                Cell { col-width: 74px; header: true; text: "260/280"; }
+                Cell { col-width: 74px; header: true; text: "260/230"; }
+                Cell { col-width: 90px; header: true; text: "ng/µL"; }
+            }
+        }
+
+        // --- Rows ---
+        Flickable {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                for row[i] in root.rows: Rectangle {
+                    height: 30px;
+                    background: touch.has-hover
+                        ? Theme.surface-alt
+                        : row.selected ? Theme.accent-soft : Theme.surface;
+
+                    // Left accent bar marks a selected (overlaid) row.
+                    Rectangle {
+                        x: 0; width: 3px; height: 100%;
+                        background: row.selected ? row.color : transparent;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 6px;
+
+                        // Colour swatch (this sample's trace colour).
+                        Rectangle {
+                            width: 40px;
+                            Rectangle {
+                                width: 14px; height: 14px;
+                                border-radius: 4px;
+                                background: row.color;
+                                opacity: row.selected ? 1.0 : 0.35;
+                            }
+                        }
+                        Cell { col-width: 34px; text: "\{row.number}"; }
+                        Cell { stretch: true; text: row.id; }
+                        Cell { col-width: 74px; text: row.type-name; }
+                        Cell { col-width: 74px; text: row.a260; }
+                        Cell { col-width: 74px; text: row.a280; }
+                        Cell { col-width: 74px; text: row.r260-280; }
+                        Cell { col-width: 74px; text: row.r260-230; }
+                        Cell { col-width: 90px; text: row.conc; text-color: row.color; }
+                    }
+
+                    // Bottom hairline separator.
+                    Rectangle {
+                        y: parent.height - 1px; height: 1px; width: 100%;
+                        background: Theme.border;
+                    }
+
+                    touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.toggle-row(i); }
+                    }
+                }
+
+                if root.rows.length == 0: Rectangle {
+                    height: 60px;
+                    Text {
+                        text: "No samples yet. Click Blank, then Measure.";
+                        color: Theme.text-faint;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,58 @@
+// Generic single-field modal input dialog (in-window overlay). Reused for
+// "New sample" and "Add custom" — set the heading/prompt/ok-text per use.
+
+import { Theme } from "theme.slint";
+import { Button, Card } from "widgets.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component InputDialog inherits Rectangle {
+    in property <string> heading;
+    in property <string> prompt;
+    in property <string> ok-text: "OK";
+    in-out property <string> value;
+    callback accept();
+    callback cancel();
+    background: #0b1220bf;
+
+    // Backdrop click cancels.
+    TouchArea { clicked => { root.cancel(); } }
+
+    Card {
+        width: 360px;
+        height: 196px;
+        // Swallow clicks so tapping the card does not cancel.
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 22px;
+            spacing: 10px;
+
+            Text {
+                text: root.heading;
+                font-size: 18px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+            Text {
+                text: root.prompt;
+                font-size: 12px;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+            }
+            field := LineEdit {
+                text <=> root.value;
+                accepted => { root.accept(); }
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Button { text: "Cancel"; clicked => { root.cancel(); } }
+                Button { text: root.ok-text; primary: true; clicked => { root.accept(); } }
+            }
+        }
+
+        // Focus the field as soon as the dialog appears.
+        init => { field.focus(); }
+    }
+}

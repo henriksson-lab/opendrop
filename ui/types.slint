@@ -1,0 +1,29 @@
+// Data structures shared between the Rust controller and the Slint UI.
+//
+// The controller owns the sample list and rebuilds these models on every
+// change (measure / select / clear); the UI is a pure view of them.
+
+// One overlaid spectral trace: an SVG path (0..1000 viewbox, built in Rust)
+// plus the colour and label shown in the legend.
+export struct PlotTrace {
+    commands: string,
+    color: color,
+    label: string,
+}
+
+// One acquired sample, as shown in the table. All numeric fields are
+// pre-formatted strings so the view never does math. `color` matches the
+// sample's plot trace; `selected` drives both the row highlight and whether
+// the sample is overlaid on the plot.
+export struct SampleRow {
+    number: int,
+    id: string,
+    type-name: string,
+    a260: string,
+    a280: string,
+    r260-280: string,
+    r260-230: string,
+    conc: string,
+    color: color,
+    selected: bool,
+}
