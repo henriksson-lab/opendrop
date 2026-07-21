@@ -1,6 +1,7 @@
-// Samples table: every acquired measurement as a row. Clicking a row toggles
-// its selection, which the controller uses to overlay that sample on the plot.
-// This is the single place all measurement values are shown.
+// Samples table: every acquired measurement as a row. A plain click selects
+// just that row; Shift-click adds/removes rows from the selection. The
+// controller uses the selection to overlay those samples on the plot. This is
+// the single place all measurement values are shown.
 
 import { Theme } from "theme.slint";
 import { SampleRow } from "types.slint";
@@ -34,7 +35,8 @@ component Cell inherits Rectangle {
 
 export component SamplesTable inherits Rectangle {
     in property <[SampleRow]> rows;
-    callback toggle-row(int);
+    // (row index, additive) — additive is true when Shift was held.
+    callback select-row(int, bool);
 
     VerticalLayout {
         // --- Header ---
@@ -64,6 +66,8 @@ export component SamplesTable inherits Rectangle {
             VerticalLayout {
                 alignment: start;
                 for row[i] in root.rows: Rectangle {
+                    // Shift state captured on press, read by `clicked`.
+                    property <bool> shift-held: false;
                     height: 30px;
                     background: touch.has-hover
                         ? Theme.surface-alt
@@ -108,7 +112,8 @@ export component SamplesTable inherits Rectangle {
 
                     touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.toggle-row(i); }
+                        pointer-event(e) => { parent.shift-held = e.modifiers.shift; }
+                        clicked => { root.select-row(i, parent.shift-held); }
                     }
                 }
 

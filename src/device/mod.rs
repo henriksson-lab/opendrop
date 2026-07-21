@@ -46,6 +46,24 @@ pub trait Spectrometer {
     /// Record a blank reference (the buffer/solvent baseline).
     fn blank(&mut self) -> Result<(), DeviceError>;
 
+    /// Verify the blank just recorded is actually usable, returning the
+    /// reference re-read for display.
+    ///
+    /// Mirrors the ND-1000's post-blank sanity check: a re-read of the
+    /// reference against itself should be flat and near zero. On success the
+    /// [`Spectrum`] that was read is returned (so the GUI can show a blank
+    /// preview). Returns [`DeviceError::NoBlank`] if no blank is held, or
+    /// [`DeviceError::Other`] if the reference is out of range. The default
+    /// implementation only checks that a blank exists; backends that can
+    /// assess reference quality should override it.
+    fn verify_blank(&mut self) -> Result<Spectrum, DeviceError> {
+        if self.has_blank() {
+            Ok(Spectrum::zeros())
+        } else {
+            Err(DeviceError::NoBlank)
+        }
+    }
+
     /// Measure a sample, returning a 10 mm-normalized absorbance [`Spectrum`].
     ///
     /// Returns [`DeviceError::NoBlank`] if no blank has been recorded.

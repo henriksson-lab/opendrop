@@ -3,22 +3,28 @@
 //! Single-window controller: owns a `Box<dyn Spectrometer>` and a list of
 //! `Sample`s, and drives the Slint UI (`AppWindow`, see `ui/app.slint`).
 //!
-//! Workflow: "New sample" creates an *empty* row (named via a dialog) and makes
-//! it the current sample; "Measure" fills — or overwrites — the current sample,
-//! or creates a new row when no sample is current. The table is the single
-//! source of truth for the readouts; selecting rows overlays their spectra on
-//! the plot. File > Export PDF renders the displayed plot plus the full table.
+//! Workflow: record a blank (verified on the spot; a green check / red cross on
+//! the Blank/Re-blank buttons reflects the result). "New sample" creates an
+//! *empty* row (named via a dialog) and selects it. A plain row click selects
+//! only that row; Shift-click extends the selection. "Measure" is enabled only
+//! with exactly one row selected and fills it (asking before overwriting
+//! existing data). "Next" advances the selection, creating a new row past the
+//! end. Blank/measure acquisitions are simulated (~1 s) behind a busy overlay.
+//! The table is the single source of truth for the readouts; selecting rows
+//! overlays their spectra on the plot. File > Export PDF renders the displayed
+//! plot plus the full table.
 
 mod pdf;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use opendrop::device::mock::MockSpectrometer;
 use opendrop::device::{DeviceError, Spectrometer};
 use opendrop::measure::calc::{nucleic_acid, NucleicAcidResult, SampleType};
 use opendrop::measure::Spectrum;
-use slint::{Color, ModelRc, VecModel};
+use slint::{Color, ModelRc, Timer, VecModel};
 
 slint::include_modules!();
 
@@ -77,6 +83,11 @@ struct AppState {
     next_number: i32,
     /// The sample number that Measure writes into (the "current" sample).
     current: Option<i32>,
+    /// Transient blank re-read shown on the plot right after Blank/Re-blank.
+    /// Any user action that changes what should be plotted (selecting a row,
+    /// measuring, adding/removing samples) clears it. When `Some`, it is what
+    /// the plot shows, in place of the selected samples.
+    blank_preview: Option<Spectrum>,
 }
 
 impl AppState {
@@ -84,6 +95,58 @@ impl AppState {
     fn current_index(&self) -> Option<usize> {
         let n = self.current?;
         self.samples.iter().position(|s| s.number == n)
+    }
+
+    /// Index of the sole selected sample, or `None` if zero or more than one is
+    /// selected. Measure writes exactly one sample, so it needs this.
+    fn single_selected_index(&self) -> Option<usize> {
+        let mut selected = self
+            .samples
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.selected)
+            .map(|(i, _)| i);
+        let first = selected.next()?;
+        selected.next().is_none().then_some(first)
+    }
+
+    /// Advance the selection to the sample after the current one — selecting the
+    /// first row when nothing is selected, or creating a fresh empty row past the
+    /// end. Leaves exactly one row selected. Returns a status message. Drives
+    /// both the "Next" button and the post-blank bootstrap.
+    fn advance_selection(&mut self) -> String {
+        let len = self.samples.len();
+        let target = match self.current_index() {
+            Some(i) if i + 1 < len => Some(i + 1),
+            Some(_) => None,            // at the end — create a new one
+            None if len > 0 => Some(0), // nothing selected — start at the top
+            None => None,
+        };
+        match target {
+            Some(i) => {
+                for (j, s) in self.samples.iter_mut().enumerate() {
+                    s.selected = j == i;
+                }
+                let n = self.samples[i].number;
+                self.current = Some(n);
+                format!("Selected sample #{n}.")
+            }
+            None => {
+                let number = self.next_number;
+                self.next_number += 1;
+                for s in &mut self.samples {
+                    s.selected = false;
+                }
+                self.samples.push(Sample {
+                    number,
+                    id: format!("Sample {number}"),
+                    filled: None,
+                    selected: true,
+                });
+                self.current = Some(number);
+                format!("Created sample #{number}. Click Measure to fill it in.")
+            }
+        }
     }
 }
 
@@ -101,6 +164,7 @@ fn main() -> anyhow::Result<()> {
         samples: Vec::new(),
         next_number: 1,
         current: None,
+        blank_preview: None,
     }));
 
     ui.set_has_blank(has_blank);
@@ -108,37 +172,21 @@ fn main() -> anyhow::Result<()> {
 
     refresh(&ui, &state);
 
-    // --- Blank: record a reference. ---
+    // --- Blank: record + verify a reference. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
         ui.unwrap().on_blank(move || {
-            let ui = ui.unwrap();
-            let result = state.borrow_mut().device.blank();
-            match result {
-                Ok(()) => {
-                    ui.set_has_blank(true);
-                    ui.set_status_text("Blank recorded. Load a sample and click Measure.".into());
-                }
-                Err(e) => ui.set_status_text(format!("Blank failed: {e}").into()),
-            }
+            perform_blank(&ui.unwrap(), &state, false);
         });
     }
 
-    // --- Re-blank: record a fresh reference without adding a sample. ---
+    // --- Re-blank: record + verify a fresh reference without adding a sample. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
         ui.unwrap().on_reblank(move || {
-            let ui = ui.unwrap();
-            let result = state.borrow_mut().device.blank();
-            match result {
-                Ok(()) => {
-                    ui.set_has_blank(true);
-                    ui.set_status_text("New blank recorded.".into());
-                }
-                Err(e) => ui.set_status_text(format!("Re-blank failed: {e}").into()),
-            }
+            perform_blank(&ui.unwrap(), &state, true);
         });
     }
 
@@ -162,6 +210,7 @@ fn main() -> anyhow::Result<()> {
             let ui = ui.unwrap();
             let number = {
                 let mut st = state.borrow_mut();
+                st.blank_preview = None;
                 let number = st.next_number;
                 st.next_number += 1;
                 let name = name.trim();
@@ -217,81 +266,92 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // --- Measure: fill (overwrite) the current sample against the blank. ---
+    // --- Measure: fill the selected sample, confirming any overwrite first. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
         ui.unwrap().on_measure(move || {
             let ui = ui.unwrap();
-            let type_index = ui.get_sample_type_index();
-            let other = ui.get_custom_constant().parse().unwrap_or(30.0);
-            let measured = state.borrow_mut().device.measure();
-            match measured {
-                Ok(spectrum) => {
-                    let result = nucleic_acid(&spectrum, sample_type_for(type_index, other));
-                    let filled = Filled {
-                        type_index,
-                        spectrum,
-                        result,
-                    };
-                    let mut st = state.borrow_mut();
-                    let number = match st.current_index() {
-                        // Overwrite the current sample.
-                        Some(i) => {
-                            st.samples[i].filled = Some(filled);
-                            st.samples[i].selected = true;
-                            st.samples[i].number
-                        }
-                        // No current sample — create one with a default name.
-                        None => {
-                            let number = st.next_number;
-                            st.next_number += 1;
-                            for s in &mut st.samples {
-                                s.selected = false;
-                            }
-                            st.samples.push(Sample {
-                                number,
-                                id: format!("Sample {number}"),
-                                filled: Some(filled),
-                                selected: true,
-                            });
-                            st.current = Some(number);
-                            number
-                        }
-                    };
-                    ui.set_status_text(format!("Measured sample #{number}.").into());
-                    drop(st);
-                    refresh(&ui, &state);
+            // Measure is only enabled with exactly one sample selected.
+            let (number, already_filled) = {
+                let st = state.borrow();
+                match st.single_selected_index() {
+                    Some(i) => (st.samples[i].number, st.samples[i].filled.is_some()),
+                    None => {
+                        ui.set_status_text("Select a single sample to measure.".into());
+                        return;
+                    }
                 }
-                Err(DeviceError::NoBlank) => {
-                    ui.set_status_text("Record a blank first.".into());
-                }
-                Err(e) => ui.set_status_text(format!("Measure failed: {e}").into()),
+            };
+            if already_filled {
+                // Ask before clobbering existing data.
+                ui.set_confirm_text(
+                    format!("Sample #{number} already has data. Overwrite it?").into(),
+                );
+                ui.set_confirm_overwrite_open(true);
+            } else {
+                perform_measure(&ui, &state);
             }
         });
     }
 
-    // --- Toggle a table row's selection (overlay on/off) + update current. ---
+    // --- Confirm overwrite: user accepted; go ahead and re-measure. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
-        ui.unwrap().on_toggle_row(move |i| {
+        ui.unwrap().on_confirm_overwrite(move || {
+            let ui = ui.unwrap();
+            ui.set_confirm_overwrite_open(false);
+            perform_measure(&ui, &state);
+        });
+    }
+
+    // --- Next: select the following sample, or create a new one at the end. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_next_sample(move || {
+            let ui = ui.unwrap();
+            let status = {
+                let mut st = state.borrow_mut();
+                st.blank_preview = None;
+                st.advance_selection()
+            };
+            ui.set_status_text(status.into());
+            refresh(&ui, &state);
+        });
+    }
+
+    // --- Select a table row: plain click = only this row; Shift = add/remove. ---
+    {
+        let ui = ui.as_weak();
+        let state = state.clone();
+        ui.unwrap().on_select_row(move |i, additive| {
             let ui = ui.unwrap();
             {
                 let mut st = state.borrow_mut();
-                let old_current = st.current;
-                let mut current = old_current;
-                if let Some(s) = st.samples.get_mut(i as usize) {
-                    s.selected = !s.selected;
-                    current = if s.selected {
-                        Some(s.number)
-                    } else if old_current == Some(s.number) {
-                        None
-                    } else {
-                        old_current
-                    };
+                st.blank_preview = None;
+                let i = i as usize;
+                if additive {
+                    // Toggle just this row, keeping the rest of the selection.
+                    if let Some(s) = st.samples.get_mut(i) {
+                        s.selected = !s.selected;
+                    }
+                    // Keep `current` on a still-selected row (prefer the toggled one).
+                    let toggled = st.samples.get(i).filter(|s| s.selected).map(|s| s.number);
+                    st.current = toggled
+                        .or_else(|| st.samples.iter().find(|s| s.selected).map(|s| s.number));
+                } else {
+                    // Select only this row.
+                    let mut current = None;
+                    for (j, s) in st.samples.iter_mut().enumerate() {
+                        s.selected = j == i;
+                        if j == i {
+                            current = Some(s.number);
+                        }
+                    }
+                    st.current = current;
                 }
-                st.current = current;
             }
             refresh(&ui, &state);
         });
@@ -349,6 +409,7 @@ fn main() -> anyhow::Result<()> {
             let ui = ui.unwrap();
             {
                 let mut st = state.borrow_mut();
+                st.blank_preview = None;
                 let before = st.samples.len();
                 st.samples.retain(|s| !s.selected);
                 let removed = before - st.samples.len();
@@ -375,6 +436,7 @@ fn main() -> anyhow::Result<()> {
                 st.samples.clear();
                 st.next_number = 1;
                 st.current = None;
+                st.blank_preview = None;
             }
             ui.set_status_text("Cleared all samples.".into());
             refresh(&ui, &state);
@@ -402,6 +464,131 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Record a blank (simulated ~1 s), verify it took, and reflect the outcome:
+/// a green check on the pressed button plus a transient blank trace on the plot
+/// on success, or a red cross plus an alert dialog on failure. Each button's
+/// glyph is independent — a Re-blank leaves the Blank check as it was. The busy
+/// overlay is shown for the duration.
+fn perform_blank(ui: &AppWindow, state: &Rc<RefCell<AppState>>, reblank: bool) {
+    ui.set_busy_text("Recording blank…".into());
+    ui.set_busy_open(true);
+
+    let ui_weak = ui.as_weak();
+    let state = state.clone();
+    // Defer past the current turn so the busy overlay paints before the
+    // blocking (simulated) acquisition runs on the event-loop thread.
+    Timer::single_shot(Duration::from_millis(80), move || {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        let outcome = {
+            let mut st = state.borrow_mut();
+            match st.device.blank() {
+                Ok(()) => st.device.verify_blank(),
+                Err(e) => Err(e),
+            }
+        };
+        ui.set_busy_open(false);
+        match outcome {
+            Ok(spectrum) => {
+                ui.set_has_blank(true);
+                // Green check on the pressed button only; leave the other as-is.
+                if reblank {
+                    ui.set_reblank_status(1);
+                } else {
+                    ui.set_blank_status(1);
+                }
+                let created = {
+                    let mut st = state.borrow_mut();
+                    // Bootstrap a first sample on Re-blank (only) when none exists
+                    // yet, so Measure becomes usable. A plain Blank never adds one.
+                    let created = if reblank && st.samples.is_empty() {
+                        Some(st.advance_selection())
+                    } else {
+                        None
+                    };
+                    // Show the blank re-read on the plot until the next action.
+                    st.blank_preview = Some(spectrum);
+                    created
+                };
+                let base = if reblank {
+                    "New blank recorded — showing blank trace."
+                } else {
+                    "Blank recorded — showing blank trace."
+                };
+                match created {
+                    Some(msg) => ui.set_status_text(format!("{base} {msg}").into()),
+                    None => ui.set_status_text(base.into()),
+                }
+                refresh(&ui, &state);
+            }
+            Err(e) => {
+                ui.set_has_blank(false);
+                // Red cross on the pressed button only; leave the other as-is.
+                if reblank {
+                    ui.set_reblank_status(2);
+                } else {
+                    ui.set_blank_status(2);
+                }
+                state.borrow_mut().blank_preview = None;
+                ui.set_blank_fail_text(format!("{e}").into());
+                ui.set_blank_fail_open(true);
+                ui.set_status_text("Blank check failed — see dialog.".into());
+                refresh(&ui, &state);
+            }
+        }
+    });
+}
+
+/// Show the busy overlay, run the (simulated ~1 s) measurement after the first
+/// paint, then write the reading into the single selected sample and close the
+/// overlay. Caller guarantees exactly one sample is selected.
+fn perform_measure(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let type_index = ui.get_sample_type_index();
+    let other: f64 = ui.get_custom_constant().parse().unwrap_or(30.0);
+    ui.set_busy_text("Measuring…".into());
+    ui.set_busy_open(true);
+
+    let ui_weak = ui.as_weak();
+    let state = state.clone();
+    Timer::single_shot(Duration::from_millis(80), move || {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        let measured = state.borrow_mut().device.measure();
+        ui.set_busy_open(false);
+        match measured {
+            Ok(spectrum) => {
+                let result = nucleic_acid(&spectrum, sample_type_for(type_index, other));
+                let filled = Filled {
+                    type_index,
+                    spectrum,
+                    result,
+                };
+                let number = {
+                    let mut st = state.borrow_mut();
+                    // The measured sample takes over the plot from the blank preview.
+                    st.blank_preview = None;
+                    match st.single_selected_index() {
+                        Some(i) => {
+                            st.samples[i].filled = Some(filled);
+                            Some(st.samples[i].number)
+                        }
+                        None => None,
+                    }
+                };
+                match number {
+                    Some(n) => ui.set_status_text(format!("Measured sample #{n}.").into()),
+                    None => ui.set_status_text("Select a single sample to measure.".into()),
+                }
+                refresh(&ui, &state);
+            }
+            Err(DeviceError::NoBlank) => ui.set_status_text("Record a blank first.".into()),
+            Err(e) => ui.set_status_text(format!("Measure failed: {e}").into()),
+        }
+    });
+}
+
 /// Map the sample-type dropdown index to a core `SampleType`. `other` is the
 /// user-entered ng/µL-per-AU constant used for the "Other" type.
 fn sample_type_for(index: i32, other: f64) -> SampleType {
@@ -426,6 +613,9 @@ fn type_name(index: i32) -> &'static str {
 /// Rebuild both the table model and the plot from the current sample list.
 fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
+
+    // Measure writes exactly one sample, so gate it on a single selection.
+    ui.set_single_selected(st.samples.iter().filter(|s| s.selected).count() == 1);
 
     // ---- Table rows ----
     let dash = "—".to_string();
@@ -469,10 +659,48 @@ fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_samples(ModelRc::new(VecModel::from(rows)));
 
     // ---- Plot traces ----
-    let displayed = displayed_indices(&st.samples);
-    let (traces, y_max) = build_traces(&st.samples, &displayed);
+    // A fresh blank re-read takes over the plot until the next action; otherwise
+    // overlay the selected filled samples.
+    let (traces, y_max) = match st.blank_preview.as_ref() {
+        Some(spectrum) => build_preview_trace(spectrum),
+        None => {
+            let displayed = displayed_indices(&st.samples);
+            build_traces(&st.samples, &displayed)
+        }
+    };
     ui.set_traces(ModelRc::new(VecModel::from(traces)));
     ui.set_y_max_label(format!("{y_max:.1}").into());
+}
+
+/// Neutral grey for the transient blank preview trace (Theme.text-faint).
+const BLANK_PREVIEW_COLOR: (u8, u8, u8) = (0x9a, 0xa4, 0xb2);
+
+/// Build the single grey trace shown right after a Blank/Re-blank. A good blank
+/// is flat and near zero, so the Y axis is floored at 1.0 AU — the reference
+/// reads as a flat baseline rather than blown-up noise.
+fn build_preview_trace(spectrum: &Spectrum) -> (Vec<PlotTrace>, f64) {
+    let mut max_a = f64::MIN;
+    let mut min_a = f64::MAX;
+    for (wl, a) in spectrum.points() {
+        if (PLOT_MIN_NM..=PLOT_MAX_NM).contains(&wl) {
+            max_a = max_a.max(a);
+            min_a = min_a.min(a);
+        }
+    }
+    let top = if max_a.is_finite() {
+        (max_a * 1.1).max(1.0)
+    } else {
+        1.0
+    };
+    let bottom = min_a.min(0.0);
+    let span = (top - bottom).max(1e-6);
+    let (r, g, b) = BLANK_PREVIEW_COLOR;
+    let trace = PlotTrace {
+        commands: trace_commands(spectrum, bottom, span).into(),
+        color: Color::from_rgb_u8(r, g, b),
+        label: "Blank (preview)".into(),
+    };
+    (vec![trace], top)
 }
 
 /// Indices of the samples shown on the plot: the selected *filled* ones. Empty

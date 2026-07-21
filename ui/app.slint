@@ -13,6 +13,8 @@ import { SpectrumPlot } from "plot.slint";
 import { SamplesTable } from "samples_table.slint";
 import { AboutDialog } from "about.slint";
 import { InputDialog } from "input_dialog.slint";
+import { MessageDialog } from "message_dialog.slint";
+import { BusyDialog } from "busy_dialog.slint";
 import { PlotTrace, SampleRow } from "types.slint";
 
 export { PlotTrace, SampleRow }
@@ -31,6 +33,12 @@ export component AppWindow inherits Window {
     in property <string> y-max-label: "1.0";
     in property <[SampleRow]> samples;
     in property <bool> has-blank: false;
+    // Exactly one sample selected — gates Measure (it writes one sample).
+    in property <bool> single-selected: false;
+    // Trailing glyph on the Blank / Re-blank buttons: 0 none, 1 OK, 2 failed.
+    // Each reflects only its own last press (the other is cleared).
+    in property <int> blank-status: 0;
+    in property <int> reblank-status: 0;
     in property <string> status-text: "Click Blank to record a reference, then Measure.";
     in property <string> device-text: "";
     in property <string> version: "0.1.0";
@@ -44,13 +52,24 @@ export component AppWindow inherits Window {
     // Add-custom dialog state.
     in-out property <bool> custom-open: false;
     in-out property <string> custom-input: "";
+    // Busy overlay shown during the (simulated) acquisition.
+    in property <bool> busy-open: false;
+    in property <string> busy-text: "Measuring…";
+    // "Overwrite existing data?" confirmation before re-measuring a filled row.
+    in-out property <bool> confirm-overwrite-open: false;
+    in property <string> confirm-text: "";
+    // "Blank check failed" alert.
+    in-out property <bool> blank-fail-open: false;
+    in property <string> blank-fail-text: "";
 
     // ---- Callbacks handled in Rust ----
     callback measure();
+    callback confirm-overwrite();
+    callback next-sample();
     callback blank();
     callback reblank();
     callback sample-type-changed(int);
-    callback toggle-row(int);
+    callback select-row(int, bool);
     callback rename-selected(string);
     callback request-new-sample();
     callback create-sample(string);
@@ -108,7 +127,6 @@ export component AppWindow inherits Window {
                 padding-left: 12px;
                 padding-right: 12px;
                 spacing: 10px;
-                alignment: start;
 
                 VerticalLayout {
                     alignment: center;
@@ -145,23 +163,30 @@ export component AppWindow inherits Window {
                         }
                         Button {
                             text: "Blank";
+                            status: root.blank-status;
                             clicked => { root.blank(); }
                         }
                         Button {
                             text: "Re-blank";
+                            status: root.reblank-status;
                             enabled: root.has-blank;
                             clicked => { root.reblank(); }
                         }
                         Button {
                             text: "Measure";
                             primary: true;
-                            enabled: root.has-blank;
+                            // One sample must be selected — Measure writes it.
+                            enabled: root.has-blank && root.single-selected;
                             clicked => { root.measure(); }
+                        }
+                        Button {
+                            text: "Next";
+                            clicked => { root.next-sample(); }
                         }
                     }
                 }
 
-                // Status message, right of the buttons.
+                // Status message fills the rest of the toolbar.
                 Rectangle {
                     horizontal-stretch: 1;
                     min-width: 60px;
@@ -170,7 +195,8 @@ export component AppWindow inherits Window {
                         font-size: 11px;
                         color: Theme.text-muted;
                         vertical-alignment: center;
-                        horizontal-alignment: right;
+                        horizontal-alignment: left;
+                        x: 4px;
                         width: parent.width - 8px;
                         height: parent.height;
                         overflow: elide;
@@ -198,7 +224,7 @@ export component AppWindow inherits Window {
                 padding: 8px;
                 SamplesTable {
                     rows: root.samples;
-                    toggle-row(i) => { root.toggle-row(i); }
+                    select-row(i, additive) => { root.select-row(i, additive); }
                 }
             }
         }
@@ -250,7 +276,7 @@ export component AppWindow inherits Window {
         height: 100%;
         heading: "Add constant";
         prompt: "Custom conversion constant (ng/µL per A260 absorbance unit)";
-        ok-text: "Set";
+        ok-text: "OK";
         value <=> root.custom-input;
         accept => { root.set-custom(root.custom-input); }
         cancel => { root.custom-open = false; }
@@ -262,5 +288,36 @@ export component AppWindow inherits Window {
         height: 100%;
         version: root.version;
         close => { root.about-open = false; }
+    }
+
+    // ---- Overwrite-confirm overlay ----
+    if root.confirm-overwrite-open: MessageDialog {
+        width: 100%;
+        height: 100%;
+        heading: "Overwrite sample?";
+        message: root.confirm-text;
+        ok-text: "Overwrite";
+        show-cancel: true;
+        accept => { root.confirm-overwrite(); }
+        cancel => { root.confirm-overwrite-open = false; }
+    }
+
+    // ---- Blank-failed alert ----
+    if root.blank-fail-open: MessageDialog {
+        width: 100%;
+        height: 100%;
+        heading: "Blank failed";
+        message: root.blank-fail-text;
+        ok-text: "OK";
+        show-cancel: false;
+        accept => { root.blank-fail-open = false; }
+        cancel => { root.blank-fail-open = false; }
+    }
+
+    // ---- Busy overlay (acquiring) — kept last so it sits on top. ----
+    if root.busy-open: BusyDialog {
+        width: 100%;
+        height: 100%;
+        message: root.busy-text;
     }
 }

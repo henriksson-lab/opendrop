@@ -9,14 +9,16 @@ export component Button inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> primary: false;
     in property <length> font-size: 13px;
+    // Trailing status glyph: 0 none, 1 green check, 2 red cross.
+    in property <int> status: 0;
     callback clicked();
 
     property <bool> hovered: touch.has-hover && enabled;
     property <bool> pressed: touch.pressed && enabled;
 
     height: 32px;
-    // Size to the label so text never clips; 28px of horizontal breathing room.
-    min-width: label.preferred-width + 28px;
+    // Size to the label so text never clips; add room for the status glyph.
+    min-width: label.preferred-width + (root.status == 0 ? 28px : 46px);
     border-radius: Theme.radius-sm;
 
     background: !enabled
@@ -27,16 +29,25 @@ export component Button inherits Rectangle {
     border-width: primary ? 0px : 1px;
     border-color: Theme.border-strong;
 
-    label := Text {
-        text: root.text;
-        font-size: root.font-size;
-        font-weight: 600;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        width: 100%;
-        color: !root.enabled
-            ? Theme.text-faint
-            : root.primary ? Theme.accent-text : Theme.text;
+    HorizontalLayout {
+        alignment: center;
+        spacing: 5px;
+        label := Text {
+            text: root.text;
+            font-size: root.font-size;
+            font-weight: 600;
+            vertical-alignment: center;
+            color: !root.enabled
+                ? Theme.text-faint
+                : root.primary ? Theme.accent-text : Theme.text;
+        }
+        if root.status != 0: Text {
+            text: root.status == 1 ? "✓" : "✗";
+            font-size: root.font-size;
+            font-weight: 700;
+            vertical-alignment: center;
+            color: root.status == 1 ? Theme.ok-green : Theme.err-red;
+        }
     }
 
     touch := TouchArea {

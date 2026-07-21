@@ -1,0 +1,61 @@
+// Generic modal message dialog (in-window overlay). Used for the "overwrite
+// existing data?" confirmation (with a Cancel button) and the "blank failed"
+// alert (OK only — set `show-cancel: false`).
+
+import { Theme } from "theme.slint";
+import { Button, Card } from "widgets.slint";
+
+export component MessageDialog inherits Rectangle {
+    in property <string> heading;
+    in property <string> message;
+    in property <string> ok-text: "OK";
+    in property <string> cancel-text: "Cancel";
+    in property <bool> show-cancel: false;
+    // Tint the OK button as a destructive/primary action.
+    in property <bool> primary: true;
+    callback accept();
+    callback cancel();
+    background: #0b1220bf;
+
+    // Backdrop click cancels.
+    TouchArea { clicked => { root.cancel(); } }
+
+    Card {
+        width: 380px;
+        height: 190px;
+        // Swallow clicks so tapping the card does not cancel.
+        TouchArea {}
+
+        VerticalLayout {
+            padding: 22px;
+            spacing: 10px;
+
+            Text {
+                text: root.heading;
+                font-size: 18px;
+                font-weight: 700;
+                color: Theme.text;
+            }
+            Text {
+                text: root.message;
+                font-size: 13px;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                if root.show-cancel: Button {
+                    text: root.cancel-text;
+                    clicked => { root.cancel(); }
+                }
+                Button {
+                    text: root.ok-text;
+                    primary: root.primary;
+                    clicked => { root.accept(); }
+                }
+            }
+        }
+    }
+}
