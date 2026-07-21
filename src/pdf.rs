@@ -9,7 +9,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use printpdf::{BuiltinFont, Color, IndirectFontRef, Line, Mm, PdfDocument, PdfLayerReference, Point, Rgb};
+use printpdf::{
+    BuiltinFont, Color, IndirectFontRef, Line, Mm, PdfDocument, PdfLayerReference, Point, Rgb,
+};
 
 /// One overlaid spectral trace to draw on the plot.
 pub struct PdfTrace {
@@ -57,7 +59,13 @@ pub fn export(path: &Path, report: &Report) -> anyhow::Result<()> {
 
     // --- Title + instrument line ---
     layer.set_fill_color(gray(0.11));
-    layer.use_text("OpenDrop — Nucleic Acid Report", 18.0, Mm(15.0), Mm(196.0), &bold);
+    layer.use_text(
+        "OpenDrop — Nucleic Acid Report",
+        18.0,
+        Mm(15.0),
+        Mm(196.0),
+        &bold,
+    );
     layer.set_fill_color(gray(0.4));
     layer.use_text(&report.device_text, 9.0, Mm(15.0), Mm(189.0), &font);
 
@@ -73,16 +81,11 @@ pub fn export(path: &Path, report: &Report) -> anyhow::Result<()> {
 fn draw_plot(layer: &PdfLayerReference, report: &Report, font: &IndirectFontRef) {
     let (xmin, xmax) = report.x_range;
 
-    // Shared Y max across all displayed traces (>= 1.0).
-    let y_max = report
-        .traces
-        .iter()
-        .flat_map(|t| t.points.iter().map(|&(_, a)| a))
-        .fold(0.0_f64, f64::max);
-    let y_max = if y_max <= 0.0 { 1.0 } else { y_max * 1.1 };
+    // Shared Y scaling across all displayed traces, matching the UI plot.
+    let y_scale = PlotYScale::from_traces(&report.traces);
 
     let px = |wl: f64| PLOT_X0 + ((wl - xmin) / (xmax - xmin)) as f32 * (PLOT_X1 - PLOT_X0);
-    let py = |a: f64| (PLOT_Y0 + (a / y_max) as f32 * (PLOT_Y1 - PLOT_Y0)).clamp(PLOT_Y0, PLOT_Y1);
+    let py = |a: f64| y_scale.map_y(a);
 
     // Axis box.
     layer.set_outline_color(gray(0.7));
@@ -100,12 +103,42 @@ fn draw_plot(layer: &PdfLayerReference, report: &Report, font: &IndirectFontRef)
 
     // Axis labels.
     layer.set_fill_color(gray(0.4));
-    layer.use_text("10 mm Absorbance", 8.0, Mm(PLOT_X0), Mm(PLOT_Y1 + 3.0), font);
-    layer.use_text("Wavelength (nm)", 8.0, Mm(PLOT_X1 - 26.0), Mm(PLOT_Y0 - 6.0), font);
-    layer.use_text(format!("{y_max:.1}"), 8.0, Mm(PLOT_X0 - 8.0), Mm(PLOT_Y1 - 1.5), font);
-    layer.use_text("0.0", 8.0, Mm(PLOT_X0 - 6.0), Mm(PLOT_Y0 - 1.0), font);
+    layer.use_text(
+        "10 mm Absorbance",
+        8.0,
+        Mm(PLOT_X0),
+        Mm(PLOT_Y1 + 3.0),
+        font,
+    );
+    layer.use_text(
+        "Wavelength (nm)",
+        8.0,
+        Mm(PLOT_X1 - 26.0),
+        Mm(PLOT_Y0 - 6.0),
+        font,
+    );
+    layer.use_text(
+        format!("{:.1}", y_scale.top),
+        8.0,
+        Mm(PLOT_X0 - 8.0),
+        Mm(PLOT_Y1 - 1.5),
+        font,
+    );
+    layer.use_text(
+        format!("{:.1}", y_scale.bottom),
+        8.0,
+        Mm(PLOT_X0 - 8.0),
+        Mm(PLOT_Y0 - 1.0),
+        font,
+    );
     for nm in [xmin, (xmin + xmax) / 2.0, xmax] {
-        layer.use_text(format!("{nm:.0}"), 8.0, Mm(px(nm) - 3.0), Mm(PLOT_Y0 - 4.0), font);
+        layer.use_text(
+            format!("{nm:.0}"),
+            8.0,
+            Mm(px(nm) - 3.0),
+            Mm(PLOT_Y0 - 4.0),
+            font,
+        );
     }
 
     // Traces.
@@ -123,18 +156,72 @@ fn draw_plot(layer: &PdfLayerReference, report: &Report, font: &IndirectFontRef)
         let (r, g, b) = tr.color;
         layer.set_outline_color(rgb(r, g, b));
         layer.set_outline_thickness(1.5);
-        stroke(layer, &[(PLOT_X1 + 6.0, ly + 1.0), (PLOT_X1 + 12.0, ly + 1.0)], false);
+        stroke(
+            layer,
+            &[(PLOT_X1 + 6.0, ly + 1.0), (PLOT_X1 + 12.0, ly + 1.0)],
+            false,
+        );
         layer.set_fill_color(gray(0.2));
         layer.use_text(&tr.label, 8.0, Mm(PLOT_X1 + 14.0), Mm(ly), font);
         ly -= 6.0;
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct PlotYScale {
+    bottom: f64,
+    top: f64,
+    span: f64,
+}
+
+impl PlotYScale {
+    fn from_traces(traces: &[PdfTrace]) -> Self {
+        let mut min_a = f64::MAX;
+        let mut max_a = f64::MIN;
+        let mut has_points = false;
+
+        for a in traces.iter().flat_map(|t| t.points.iter().map(|&(_, a)| a)) {
+            has_points = true;
+            min_a = min_a.min(a);
+            max_a = max_a.max(a);
+        }
+
+        let top = if !has_points || !max_a.is_finite() || max_a <= 0.0 {
+            1.0
+        } else {
+            max_a * 1.1
+        };
+        let bottom = if has_points { min_a.min(0.0) } else { 0.0 };
+        let span = (top - bottom).max(1e-6);
+
+        Self { bottom, top, span }
+    }
+
+    fn map_y(&self, absorbance: f64) -> f32 {
+        (PLOT_Y0 + ((absorbance - self.bottom) / self.span) as f32 * (PLOT_Y1 - PLOT_Y0))
+            .clamp(PLOT_Y0, PLOT_Y1)
+    }
+}
+
 /// Draw the sample table below the plot.
-fn draw_table(layer: &PdfLayerReference, report: &Report, font: &IndirectFontRef, bold: &IndirectFontRef) {
+fn draw_table(
+    layer: &PdfLayerReference,
+    report: &Report,
+    font: &IndirectFontRef,
+    bold: &IndirectFontRef,
+) {
     // Left x of each column (mm).
     const COLS: [f32; 8] = [15.0, 26.0, 74.0, 96.0, 118.0, 140.0, 168.0, 196.0];
-    const HEADERS: [&str; 8] = ["#", "Sample ID", "Type", "A260", "A280", "260/280", "260/230", "ng/µL"];
+    const HEADERS: [&str; 8] = [
+        "#",
+        "Sample ID",
+        "Type",
+        "A260",
+        "A280",
+        "260/280",
+        "260/230",
+        "ng/µL",
+    ];
     const ROW_H: f32 = 5.5;
     let mut y: f32 = 100.0;
 
@@ -152,7 +239,13 @@ fn draw_table(layer: &PdfLayerReference, report: &Report, font: &IndirectFontRef
     for row in &report.rows {
         if y < 14.0 {
             layer.set_fill_color(gray(0.4));
-            layer.use_text("… more rows omitted", 8.0, Mm(15.0), Mm(y + ROW_H - 1.0), font);
+            layer.use_text(
+                "… more rows omitted",
+                8.0,
+                Mm(15.0),
+                Mm(y + ROW_H - 1.0),
+                font,
+            );
             break;
         }
         for (i, cell) in row.iter().enumerate() {
@@ -178,7 +271,12 @@ fn stroke(layer: &PdfLayerReference, pts: &[(f32, f32)], closed: bool) {
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::Rgb(Rgb::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, None))
+    Color::Rgb(Rgb::new(
+        r as f32 / 255.0,
+        g as f32 / 255.0,
+        b as f32 / 255.0,
+        None,
+    ))
 }
 
 fn gray(v: f32) -> Color {
@@ -188,6 +286,58 @@ fn gray(v: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn trace(absorbance: &[f64]) -> PdfTrace {
+        PdfTrace {
+            color: (0, 0, 0),
+            label: "test".to_string(),
+            points: absorbance
+                .iter()
+                .enumerate()
+                .map(|(i, &a)| (220.0 + i as f64, a))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn plot_y_scale_defaults_to_zero_bottom_and_one_top_without_points() {
+        let scale = PlotYScale::from_traces(&[]);
+
+        assert_eq!(
+            scale,
+            PlotYScale {
+                bottom: 0.0,
+                top: 1.0,
+                span: 1.0
+            }
+        );
+        assert_eq!(scale.map_y(0.0), PLOT_Y0);
+        assert_eq!(scale.map_y(1.0), PLOT_Y1);
+    }
+
+    #[test]
+    fn plot_y_scale_adds_headroom_for_positive_absorbance() {
+        let scale = PlotYScale::from_traces(&[trace(&[0.1, 2.0, 1.0])]);
+
+        assert_eq!(scale.bottom, 0.0);
+        assert_eq!(scale.top, 2.2);
+        assert_eq!(scale.span, 2.2);
+        assert_eq!(scale.map_y(0.0), PLOT_Y0);
+        assert_eq!(scale.map_y(2.2), PLOT_Y1);
+    }
+
+    #[test]
+    fn plot_y_scale_uses_negative_bottom_and_maps_zero_above_axis() {
+        let scale = PlotYScale::from_traces(&[trace(&[-0.5, 0.5, 1.0])]);
+
+        assert_eq!(scale.bottom, -0.5);
+        assert_eq!(scale.top, 1.1);
+        assert_eq!(scale.span, 1.6);
+        assert_eq!(scale.map_y(-0.5), PLOT_Y0);
+        assert!(scale.map_y(0.0) > PLOT_Y0);
+        assert!(scale.map_y(0.0) < PLOT_Y1);
+        assert_eq!(scale.map_y(1.1), PLOT_Y1);
+    }
 
     #[test]
     fn export_writes_a_valid_pdf() {

@@ -4,10 +4,10 @@
 //! `Sample`s, and drives the Slint UI (`AppWindow`, see `ui/app.slint`).
 //!
 //! Workflow: "New sample" creates an *empty* row (named via a dialog) and makes
-//! it the current sample; "Measure" fills — or overwrites — the current sample.
-//! The table is the single source of truth for the readouts; selecting rows
-//! overlays their spectra on the plot. File > Export PDF renders the displayed
-//! plot plus the full table.
+//! it the current sample; "Measure" fills — or overwrites — the current sample,
+//! or creates a new row when no sample is current. The table is the single
+//! source of truth for the readouts; selecting rows overlays their spectra on
+//! the plot. File > Export PDF renders the displayed plot plus the full table.
 
 mod pdf;
 
@@ -92,6 +92,7 @@ fn main() -> anyhow::Result<()> {
 
     let device: Box<dyn Spectrometer> = Box::new(MockSpectrometer::new());
     let info = device.info();
+    let has_blank = device.has_blank();
     ui.set_device_text(format!("{} · {} · {}", info.model, info.serial, info.config).into());
     ui.set_version(env!("CARGO_PKG_VERSION").into());
 
@@ -102,10 +103,8 @@ fn main() -> anyhow::Result<()> {
         current: None,
     }));
 
-    // Open with a few demo measurements so the UI isn't empty.
-    seed_demo(&state);
-    ui.set_has_blank(true);
-    ui.set_status_text("Loaded demo samples. Select rows to overlay them on the plot.".into());
+    ui.set_has_blank(has_blank);
+    ui.set_status_text("Click Blank to record a reference, then Measure.".into());
 
     refresh(&ui, &state);
 
@@ -272,7 +271,7 @@ fn main() -> anyhow::Result<()> {
         });
     }
 
-    // --- Toggle a table row's selection (overlay on/off) + make it current. ---
+    // --- Toggle a table row's selection (overlay on/off) + update current. ---
     {
         let ui = ui.as_weak();
         let state = state.clone();
@@ -280,13 +279,19 @@ fn main() -> anyhow::Result<()> {
             let ui = ui.unwrap();
             {
                 let mut st = state.borrow_mut();
-                let number = st.samples.get(i as usize).map(|s| s.number);
+                let old_current = st.current;
+                let mut current = old_current;
                 if let Some(s) = st.samples.get_mut(i as usize) {
                     s.selected = !s.selected;
+                    current = if s.selected {
+                        Some(s.number)
+                    } else if old_current == Some(s.number) {
+                        None
+                    } else {
+                        old_current
+                    };
                 }
-                if let Some(n) = number {
-                    st.current = Some(n);
-                }
+                st.current = current;
             }
             refresh(&ui, &state);
         });
@@ -327,7 +332,11 @@ fn main() -> anyhow::Result<()> {
         ui.unwrap().on_sample_type_changed(move |idx| {
             let ui = ui.unwrap();
             ui.set_status_text(
-                format!("Sample type set to {} for the next measurement.", type_name(idx)).into(),
+                format!(
+                    "Sample type set to {} for the next measurement.",
+                    type_name(idx)
+                )
+                .into(),
             );
         });
     }
@@ -391,47 +400,6 @@ fn main() -> anyhow::Result<()> {
 
     ui.run()?;
     Ok(())
-}
-
-/// Populate the sample list with a few demo measurements (via the mock backend)
-/// so the app opens with something to look at. The first two are pre-selected to
-/// show the plot overlay.
-fn seed_demo(state: &Rc<RefCell<AppState>>) {
-    let demos = [
-        ("λ DNA ladder", 0),
-        ("Plasmid miniprep", 0),
-        ("gDNA extract", 0),
-        ("Total RNA", 1),
-    ];
-    let mut st = state.borrow_mut();
-    if st.device.blank().is_err() {
-        return;
-    }
-    for (name, type_index) in demos {
-        let Ok(spectrum) = st.device.measure() else {
-            continue;
-        };
-        let result = nucleic_acid(&spectrum, sample_type_for(type_index, 30.0));
-        let number = st.next_number;
-        st.next_number += 1;
-        st.samples.push(Sample {
-            number,
-            id: name.to_string(),
-            filled: Some(Filled {
-                type_index,
-                spectrum,
-                result,
-            }),
-            selected: false,
-        });
-    }
-    if let Some(s) = st.samples.get_mut(0) {
-        s.selected = true;
-    }
-    if let Some(s) = st.samples.get_mut(1) {
-        s.selected = true;
-    }
-    st.current = st.samples.last().map(|s| s.number);
 }
 
 /// Map the sample-type dropdown index to a core `SampleType`. `other` is the
@@ -507,26 +475,15 @@ fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_y_max_label(format!("{y_max:.1}").into());
 }
 
-/// Indices of the samples shown on the plot: the selected *filled* ones, or —
-/// when none qualify — the most recently measured sample. Empty (unmeasured)
-/// samples are never plotted.
+/// Indices of the samples shown on the plot: the selected *filled* ones. Empty
+/// or unselected samples are never plotted.
 fn displayed_indices(samples: &[Sample]) -> Vec<usize> {
-    let selected: Vec<usize> = samples
+    samples
         .iter()
         .enumerate()
         .filter(|(_, s)| s.selected && s.filled.is_some())
         .map(|(i, _)| i)
-        .collect();
-    if !selected.is_empty() {
-        return selected;
-    }
-    samples
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, s)| s.filled.is_some())
-        .map(|(i, _)| vec![i])
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Build the overlaid plot traces (SVG paths in a 0..1000 viewbox) for the
@@ -658,7 +615,16 @@ fn export_pdf(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     "—".into(),
                 ),
             };
-            vec![s.number.to_string(), s.id.clone(), ty, a260, a280, r280, r230, conc]
+            vec![
+                s.number.to_string(),
+                s.id.clone(),
+                ty,
+                a260,
+                a280,
+                r280,
+                r230,
+                conc,
+            ]
         })
         .collect();
 
@@ -673,5 +639,41 @@ fn export_pdf(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     match pdf::export(&path, &report) {
         Ok(()) => ui.set_status_text(format!("Exported PDF to {}", path.display()).into()),
         Err(e) => ui.set_status_text(format!("PDF export failed: {e}").into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(number: i32, selected: bool, filled: bool) -> Sample {
+        Sample {
+            number,
+            id: format!("Sample {number}"),
+            filled: filled.then(|| Filled {
+                type_index: 0,
+                spectrum: Spectrum::zeros(),
+                result: nucleic_acid(&Spectrum::zeros(), SampleType::DsDna),
+            }),
+            selected,
+        }
+    }
+
+    #[test]
+    fn displayed_indices_include_only_selected_filled_samples() {
+        let samples = vec![
+            sample(1, true, true),
+            sample(2, false, true),
+            sample(3, true, false),
+        ];
+
+        assert_eq!(displayed_indices(&samples), vec![0]);
+    }
+
+    #[test]
+    fn displayed_indices_are_empty_when_all_rows_are_deselected() {
+        let samples = vec![sample(1, false, true), sample(2, false, true)];
+
+        assert!(displayed_indices(&samples).is_empty());
     }
 }
