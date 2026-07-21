@@ -168,7 +168,15 @@ fn main() -> anyhow::Result<()> {
     }));
 
     ui.set_has_blank(has_blank);
-    ui.set_status_text("Click Blank to record a reference, then Measure.".into());
+
+    // Open populated with a few representative demo samples.
+    seed_demo(&state);
+    ui.set_status_text(if state.borrow().samples.is_empty() {
+        "Click Blank to record a reference, then Measure.".into()
+    } else {
+        "Loaded demo samples. Select rows to overlay them on the plot, or Blank to start a run."
+            .into()
+    });
 
     refresh(&ui, &state);
 
@@ -464,6 +472,47 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Seed a few representative demo samples so the app opens populated (and to
+/// keep `docs/images/opendrop.png` in sync). A throwaway zero-delay mock
+/// synthesizes the spectra so startup stays instant; the first two are selected
+/// so they overlay on the plot.
+fn seed_demo(state: &Rc<RefCell<AppState>>) {
+    // (name, sample-type index): dsDNA / dsDNA / dsDNA / RNA.
+    let demos: [(&str, i32); 4] = [
+        ("λ DNA ladder", 0),
+        ("Plasmid miniprep", 0),
+        ("gDNA extract", 0),
+        ("Total RNA", 1),
+    ];
+
+    let mut dev = MockSpectrometer::new();
+    dev.set_delay(Duration::ZERO);
+    if dev.blank().is_err() {
+        return;
+    }
+
+    let mut st = state.borrow_mut();
+    for (i, (name, type_index)) in demos.iter().enumerate() {
+        let Ok(spectrum) = dev.measure() else {
+            continue;
+        };
+        let result = nucleic_acid(&spectrum, sample_type_for(*type_index, 30.0));
+        let number = st.next_number;
+        st.next_number += 1;
+        st.samples.push(Sample {
+            number,
+            id: (*name).to_string(),
+            filled: Some(Filled {
+                type_index: *type_index,
+                spectrum,
+                result,
+            }),
+            selected: i < 2, // overlay the first two by default
+        });
+    }
+    st.current = st.samples.first().map(|s| s.number);
+}
+
 /// Record a blank (simulated ~1 s), verify it took, and reflect the outcome:
 /// a green check on the pressed button plus a transient blank trace on the plot
 /// on success, or a red cross plus an alert dialog on failure. Each button's
@@ -614,8 +663,11 @@ fn type_name(index: i32) -> &'static str {
 fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
 
-    // Measure writes exactly one sample, so gate it on a single selection.
-    ui.set_single_selected(st.samples.iter().filter(|s| s.selected).count() == 1);
+    // Gate the selection-dependent controls: Measure needs exactly one row,
+    // Rename / Delete Selected need at least one.
+    let selected_count = st.samples.iter().filter(|s| s.selected).count();
+    ui.set_single_selected(selected_count == 1);
+    ui.set_has_selection(selected_count >= 1);
 
     // ---- Table rows ----
     let dash = "—".to_string();
@@ -661,7 +713,7 @@ fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // ---- Plot traces ----
     // A fresh blank re-read takes over the plot until the next action; otherwise
     // overlay the selected filled samples.
-    let (traces, y_max) = match st.blank_preview.as_ref() {
+    let (traces, y_max, y_min) = match st.blank_preview.as_ref() {
         Some(spectrum) => build_preview_trace(spectrum),
         None => {
             let displayed = displayed_indices(&st.samples);
@@ -670,6 +722,17 @@ fn refresh(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     };
     ui.set_traces(ModelRc::new(VecModel::from(traces)));
     ui.set_y_max_label(format!("{y_max:.1}").into());
+    ui.set_y_min_label(fmt_axis_min(y_min).into());
+}
+
+/// Format the bottom Y-axis label, collapsing a near-zero (possibly slightly
+/// negative) minimum to a clean "0.0" instead of "-0.0".
+fn fmt_axis_min(bottom: f64) -> String {
+    if bottom.abs() < 0.05 {
+        "0.0".to_string()
+    } else {
+        format!("{bottom:.1}")
+    }
 }
 
 /// Neutral grey for the transient blank preview trace (Theme.text-faint).
@@ -677,8 +740,9 @@ const BLANK_PREVIEW_COLOR: (u8, u8, u8) = (0x9a, 0xa4, 0xb2);
 
 /// Build the single grey trace shown right after a Blank/Re-blank. A good blank
 /// is flat and near zero, so the Y axis is floored at 1.0 AU — the reference
-/// reads as a flat baseline rather than blown-up noise.
-fn build_preview_trace(spectrum: &Spectrum) -> (Vec<PlotTrace>, f64) {
+/// reads as a flat baseline rather than blown-up noise. Returns the traces plus
+/// the Y-axis top and bottom used.
+fn build_preview_trace(spectrum: &Spectrum) -> (Vec<PlotTrace>, f64, f64) {
     let mut max_a = f64::MIN;
     let mut min_a = f64::MAX;
     for (wl, a) in spectrum.points() {
@@ -700,7 +764,7 @@ fn build_preview_trace(spectrum: &Spectrum) -> (Vec<PlotTrace>, f64) {
         color: Color::from_rgb_u8(r, g, b),
         label: "Blank (preview)".into(),
     };
-    (vec![trace], top)
+    (vec![trace], top, bottom)
 }
 
 /// Indices of the samples shown on the plot: the selected *filled* ones. Empty
@@ -716,11 +780,11 @@ fn displayed_indices(samples: &[Sample]) -> Vec<usize> {
 
 /// Build the overlaid plot traces (SVG paths in a 0..1000 viewbox) for the
 /// displayed samples, sharing a common auto-scaled Y axis. Every index in
-/// `displayed` is guaranteed to be a filled sample. Returns the traces and the
-/// Y-axis maximum used.
-fn build_traces(samples: &[Sample], displayed: &[usize]) -> (Vec<PlotTrace>, f64) {
+/// `displayed` is guaranteed to be a filled sample. Returns the traces plus the
+/// Y-axis top and bottom used.
+fn build_traces(samples: &[Sample], displayed: &[usize]) -> (Vec<PlotTrace>, f64, f64) {
     if displayed.is_empty() {
-        return (Vec::new(), 1.0);
+        return (Vec::new(), 1.0, 0.0);
     }
 
     // Shared Y scaling across every displayed spectrum in the plotted window.
@@ -754,7 +818,7 @@ fn build_traces(samples: &[Sample], displayed: &[usize]) -> (Vec<PlotTrace>, f64
             }
         })
         .collect();
-    (traces, top)
+    (traces, top, bottom)
 }
 
 /// The spectrum of a sample known to be filled (panics otherwise — callers only

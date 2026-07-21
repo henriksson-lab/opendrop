@@ -3,6 +3,7 @@
 // controller uses the selection to overlay those samples on the plot. This is
 // the single place all measurement values are shown.
 
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { SampleRow } from "types.slint";
 
@@ -60,9 +61,12 @@ export component SamplesTable inherits Rectangle {
             }
         }
 
-        // --- Rows ---
-        Flickable {
+        // --- Rows (scrolls vertically; scrollbar shows when the list overflows) ---
+        ScrollView {
             vertical-stretch: 1;
+            // Content height = one 30px row each (or the empty-state hint), so the
+            // scrollbar engages once the rows exceed the visible area.
+            viewport-height: root.rows.length > 0 ? root.rows.length * 30px : 60px;
             VerticalLayout {
                 alignment: start;
                 for row[i] in root.rows: Rectangle {

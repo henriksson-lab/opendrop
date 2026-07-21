@@ -24,17 +24,20 @@ export component AppWindow inherits Window {
     default-font-size: 13px;
     background: Theme.window-bg;
     preferred-width: 1120px;
-    preferred-height: 760px;
+    preferred-height: 680px;
     min-width: 940px;
-    min-height: 620px;
+    min-height: 600px;
 
     // ---- View state (driven by the Rust controller) ----
     in property <[PlotTrace]> traces;
     in property <string> y-max-label: "1.0";
+    in property <string> y-min-label: "0.0";
     in property <[SampleRow]> samples;
     in property <bool> has-blank: false;
     // Exactly one sample selected — gates Measure (it writes one sample).
     in property <bool> single-selected: false;
+    // At least one sample selected — gates Rename / Delete Selected.
+    in property <bool> has-selection: false;
     // Trailing glyph on the Blank / Re-blank buttons: 0 none, 1 OK, 2 failed.
     // Each reflects only its own last press (the other is cleared).
     in property <int> blank-status: 0;
@@ -213,6 +216,7 @@ export component AppWindow inherits Window {
                 SpectrumPlot {
                     traces: root.traces;
                     y-max-label: root.y-max-label;
+                    y-min-label: root.y-min-label;
                 }
             }
         }
@@ -248,11 +252,13 @@ export component AppWindow inherits Window {
             }
             Button {
                 text: "Rename";
+                enabled: root.has-selection;
                 clicked => { root.rename-selected(root.rename-text); }
             }
             Rectangle { horizontal-stretch: 1; }
             Button {
                 text: "Delete Selected";
+                enabled: root.has-selection;
                 clicked => { root.remove-selected(); }
             }
         }

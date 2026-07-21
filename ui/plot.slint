@@ -8,6 +8,7 @@ import { PlotTrace } from "types.slint";
 export component SpectrumPlot inherits Rectangle {
     in property <[PlotTrace]> traces;
     in property <string> y-max-label: "1.0";
+    in property <string> y-min-label: "0.0";
 
     // 220..350 nm tick positions as fractions of the plot width.
     property <[{nm: string, frac: float}]> ticks: [
@@ -21,43 +22,49 @@ export component SpectrumPlot inherits Rectangle {
         { nm: "350", frac: 1.0 },
     ];
 
-    HorizontalLayout {
+    // Fixed width of the y-axis gutter; reused below the plot so the x-axis
+    // ticks line up with the plot box.
+    property <length> axis-w: 52px;
+
+    VerticalLayout {
         spacing: 4px;
 
-        // Y-axis: max label at the top, rotated title, zero at the bottom.
-        VerticalLayout {
-            width: 52px;
-            Text {
-                text: root.y-max-label;
-                font-size: 11px;
-                color: Theme.text-muted;
-                horizontal-alignment: right;
-                width: 100%;
-            }
-            Rectangle {
-                vertical-stretch: 1;
-                Text {
-                    text: "10 mm Absorbance";
-                    font-size: 11px;
-                    color: Theme.text-muted;
-                    transform-rotation: -90deg;
-                }
-            }
-            Text {
-                text: "0.0";
-                font-size: 11px;
-                color: Theme.text-muted;
-                horizontal-alignment: right;
-                width: 100%;
-            }
-            Rectangle { height: 30px; }
-        }
-
-        VerticalLayout {
+        // ---- Plot row: the y-axis labels sit in a column that is exactly the
+        // plot's height, so max/min anchor to the plot's top/bottom edges (no
+        // dependence on the x-axis / legend rows below). ----
+        HorizontalLayout {
+            vertical-stretch: 1;
             spacing: 4px;
 
+            VerticalLayout {
+                width: root.axis-w;
+                Text {
+                    text: root.y-max-label;
+                    font-size: 11px;
+                    color: Theme.text-muted;
+                    horizontal-alignment: right;
+                    width: 100%;
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    Text {
+                        text: "10 mm Absorbance";
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        transform-rotation: -90deg;
+                    }
+                }
+                Text {
+                    text: root.y-min-label;
+                    font-size: 11px;
+                    color: Theme.text-muted;
+                    horizontal-alignment: right;
+                    width: 100%;
+                }
+            }
+
             plot := Rectangle {
-                vertical-stretch: 1;
+                horizontal-stretch: 1;
                 background: Theme.plot-bg;
                 border-radius: Theme.radius-sm;
                 border-width: 1px;
@@ -100,42 +107,57 @@ export component SpectrumPlot inherits Rectangle {
                     wrap: word-wrap;
                 }
             }
+        }
 
-            // X-axis tick labels + title.
-            Rectangle {
-                height: 14px;
-                for t in root.ticks: Text {
-                    x: t.frac * parent.width - self.width / 2;
-                    text: t.nm;
-                    font-size: 11px;
-                    color: Theme.text-muted;
-                }
-            }
-            Text {
-                text: "Wavelength (nm)";
-                font-size: 11px;
-                color: Theme.text-muted;
-                horizontal-alignment: center;
-            }
+        // ---- X-axis row: a left gutter matching the y-axis column keeps the
+        // wavelength ticks aligned under the plot box. It hugs its content
+        // (`vertical-stretch: 0`) so only the plot row above absorbs slack —
+        // otherwise the legend gets pushed to the bottom of the card. ----
+        HorizontalLayout {
+            vertical-stretch: 0;
+            spacing: 4px;
 
-            // Legend — colour swatch + label per displayed trace.
-            HorizontalLayout {
-                height: root.traces.length > 0 ? 18px : 0px;
-                spacing: 14px;
-                alignment: center;
-                for tr in root.traces: HorizontalLayout {
-                    spacing: 5px;
-                    Rectangle {
-                        width: 12px; height: 12px;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: 3px;
-                        background: tr.color;
-                    }
-                    Text {
-                        text: tr.label;
+            Rectangle { width: root.axis-w; }
+
+            VerticalLayout {
+                spacing: 4px;
+
+                // X-axis tick labels.
+                Rectangle {
+                    height: 14px;
+                    for t in root.ticks: Text {
+                        x: t.frac * parent.width - self.width / 2;
+                        text: t.nm;
                         font-size: 11px;
                         color: Theme.text-muted;
-                        vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: "Wavelength (nm)";
+                    font-size: 11px;
+                    color: Theme.text-muted;
+                    horizontal-alignment: center;
+                }
+
+                // Legend — colour swatch + label per displayed trace.
+                HorizontalLayout {
+                    height: root.traces.length > 0 ? 18px : 0px;
+                    spacing: 14px;
+                    alignment: center;
+                    for tr in root.traces: HorizontalLayout {
+                        spacing: 5px;
+                        Rectangle {
+                            width: 12px; height: 12px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 3px;
+                            background: tr.color;
+                        }
+                        Text {
+                            text: tr.label;
+                            font-size: 11px;
+                            color: Theme.text-muted;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
