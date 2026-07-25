@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use opendrop::formats::{read_archive, to_string, write_archive, MeasurementType};
+use tiselius::formats::{read_archive, to_string, write_archive, MeasurementType};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -63,7 +63,7 @@ fn ndj_byte_stable_and_round_trips() {
 
     // Read -> write reproduces the original bytes exactly.
     let original_bytes = std::fs::read(&path).unwrap();
-    let written_bytes = opendrop::formats::encode_windows_1252(&to_string(&a));
+    let written_bytes = tiselius::formats::encode_windows_1252(&to_string(&a));
     assert_eq!(
         written_bytes, original_bytes,
         "read->write must be byte-stable"
@@ -71,7 +71,7 @@ fn ndj_byte_stable_and_round_trips() {
 
     // parse -> write -> parse -> equal (string API; `module` is a file-name
     // property, not stored in the file, so we compare via strings).
-    let b = opendrop::formats::parse(&to_string(&a)).unwrap();
+    let b = tiselius::formats::parse(&to_string(&a)).unwrap();
     let mut a_no_module = a.clone();
     a_no_module.module = String::new();
     assert_eq!(a_no_module, b);
@@ -90,7 +90,7 @@ fn ndv_byte_stable_round_trip() {
     let path = fixture("report_sample.ndv");
     let a = read_archive(&path).unwrap();
     let original_bytes = std::fs::read(&path).unwrap();
-    let written_bytes = opendrop::formats::encode_windows_1252(&to_string(&a));
+    let written_bytes = tiselius::formats::encode_windows_1252(&to_string(&a));
     assert_eq!(
         written_bytes, original_bytes,
         ".ndv read->write must be byte-stable"

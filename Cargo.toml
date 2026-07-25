@@ -1,19 +1,19 @@
 [package]
-name = "opendrop"
+name = "tiselius"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mahogny/opendrop"
-authors = ["OpenDrop contributors"]
+repository = "https://github.com/mahogny/tiselius"
+authors = ["Tiselius contributors"]
 description = "Open-source library and GUI for the NanoDrop ND-1000 spectrophotometer"
-default-run = "opendrop"
+default-run = "tiselius"
 
 [lib]
-name = "opendrop"
+name = "tiselius"
 path = "src/lib.rs"
 
 [[bin]]
-name = "opendrop"
+name = "tiselius"
 path = "src/main.rs"
 # The binary is the GUI; building it requires the `gui` feature (on by default).
 required-features = ["gui"]
@@ -33,7 +33,7 @@ slint-build = { version = "1.17", optional = true }
 
 [features]
 default = ["gui"]
-# The desktop GUI + the `opendrop` binary. Disable to use OpenDrop as a library.
+# The desktop GUI + the `tiselius` binary. Disable to use Tiselius as a library.
 gui = ["dep:slint", "dep:slint-build", "dep:anyhow", "dep:printpdf", "dep:rfd"]
 # The real Ocean Optics USB2000 hardware backend (stub until a device capture
 # confirms the byte protocol; see docs/usb_protocol_findings.md).
@@ -44,12 +44,12 @@ usb2000 = []
 # (i.e. `cargo deb --no-build` after `cargo build --release`).
 # ---------------------------------------------------------------------------
 [package.metadata.deb]
-maintainer = "OpenDrop contributors <opendrop-maintainers@users.noreply.github.com>"
-copyright = "2026, OpenDrop contributors"
+maintainer = "Tiselius contributors <tiselius-maintainers@users.noreply.github.com>"
+copyright = "2026, Tiselius contributors"
 section = "science"
 priority = "optional"
 extended-description = """\
-OpenDrop is an open-source desktop GUI reimplementation of the software for the \
+Tiselius is an open-source desktop GUI reimplementation of the software for the \
 Thermo Scientific NanoDrop ND-1000 microvolume spectrophotometer. It reads and \
 plots absorbance spectra, computes nucleic-acid and protein concentrations, and \
 opens NanoDrop archive files (.ndj/.ndt/.ndv)."""
@@ -61,11 +61,11 @@ opens NanoDrop archive files (.ndj/.ndt/.ndv)."""
 depends = "$auto, libxkbcommon0"
 recommends = "libwayland-client0, libwayland-cursor0, libx11-6, libxcb1"
 assets = [
-    ["target/release/opendrop", "usr/bin/", "755"],
-    ["packaging/opendrop.desktop", "usr/share/applications/opendrop.desktop", "644"],
-    ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/opendrop.svg", "644"],
-    ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/opendrop.png", "644"],
-    ["assets/icon-128.png", "usr/share/icons/hicolor/128x128/apps/opendrop.png", "644"],
+    ["target/release/tiselius", "usr/bin/", "755"],
+    ["packaging/tiselius.desktop", "usr/share/applications/tiselius.desktop", "644"],
+    ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/tiselius.svg", "644"],
+    ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/tiselius.png", "644"],
+    ["assets/icon-128.png", "usr/share/icons/hicolor/128x128/apps/tiselius.png", "644"],
 ]
 maintainer-scripts = "packaging/deb"
 
@@ -74,14 +74,14 @@ maintainer-scripts = "packaging/deb"
 # (i.e. `cargo bundle --release`), then wrapped into a .dmg.
 # ---------------------------------------------------------------------------
 [package.metadata.bundle]
-name = "OpenDrop"
-identifier = "org.opendrop.OpenDrop"
+name = "Tiselius"
+identifier = "org.tiselius.Tiselius"
 category = "public.app-category.education"
 short_description = "GUI for the NanoDrop ND-1000 spectrophotometer"
 long_description = """\
-OpenDrop is an open-source desktop GUI reimplementation of the software for the \
+Tiselius is an open-source desktop GUI reimplementation of the software for the \
 Thermo Scientific NanoDrop ND-1000 microvolume spectrophotometer."""
-copyright = "2026, OpenDrop contributors"
+copyright = "2026, Tiselius contributors"
 icon = [
     "assets/icon-32.png",
     "assets/icon-128.png",

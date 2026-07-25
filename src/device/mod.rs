@@ -1,4 +1,4 @@
-//! The spectrometer abstraction for OpenDrop.
+//! The spectrometer abstraction for Tiselius.
 //!
 //! Callers talk to hardware only through the [`Spectrometer`] trait, so the
 //! synthetic [`mock`] backend and the future real [`usb2000`] backend are fully

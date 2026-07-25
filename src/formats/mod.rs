@@ -22,13 +22,13 @@
 //!
 //! # Example
 //! ```no_run
-//! use opendrop::formats::{read_archive, write_archive};
+//! use tiselius::formats::{read_archive, write_archive};
 //! let archive = read_archive("Nucleic Acid 2007 06 04.ndj")?;
 //! for row in &archive.rows {
 //!     println!("{:?}: A260 cell = {:?}", row.sample_id(), row.get("A260"));
 //! }
 //! write_archive(&archive, "copy.ndj")?;
-//! # Ok::<(), opendrop::formats::FormatError>(())
+//! # Ok::<(), tiselius::formats::FormatError>(())
 //! ```
 
 mod error;

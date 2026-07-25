@@ -1,4 +1,4 @@
-//! OpenDrop application entry point.
+//! Tiselius application entry point.
 //!
 //! Single-window controller: owns a `Box<dyn Spectrometer>` and a list of
 //! `Sample`s, and drives the Slint UI (`AppWindow`, see `ui/app.slint`).
@@ -20,11 +20,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use opendrop::device::mock::MockSpectrometer;
-use opendrop::device::{DeviceError, Spectrometer};
-use opendrop::measure::calc::{nucleic_acid, NucleicAcidResult, SampleType};
-use opendrop::measure::Spectrum;
 use slint::{Color, ModelRc, Timer, VecModel};
+use tiselius::device::mock::MockSpectrometer;
+use tiselius::device::{DeviceError, Spectrometer};
+use tiselius::measure::calc::{nucleic_acid, NucleicAcidResult, SampleType};
+use tiselius::measure::Spectrum;
 
 slint::include_modules!();
 
@@ -473,7 +473,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Seed a few representative demo samples so the app opens populated (and to
-/// keep `docs/images/opendrop.png` in sync). A throwaway zero-delay mock
+/// keep `docs/images/tiselius.png` in sync). A throwaway zero-delay mock
 /// synthesizes the spectra so startup stays instant; the first two are selected
 /// so they overlay on the plot.
 fn seed_demo(state: &Rc<RefCell<AppState>>) {
@@ -859,7 +859,7 @@ fn fmt_ratio(v: f64) -> String {
 fn export_pdf(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let path = match rfd::FileDialog::new()
         .set_title("Export PDF")
-        .set_file_name("opendrop-report.pdf")
+        .set_file_name("tiselius-report.pdf")
         .add_filter("PDF", &["pdf"])
         .save_file()
     {

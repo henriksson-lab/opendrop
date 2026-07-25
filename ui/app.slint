@@ -1,4 +1,4 @@
-// OpenDrop — single-window application shell.
+// Tiselius — single-window application shell.
 //
 // `AppWindow` stays the exported root so `include_modules!()` in main.rs keeps
 // working. It owns all view state (driven by the Rust controller) and lays out,
@@ -20,7 +20,7 @@ import { PlotTrace, SampleRow } from "types.slint";
 export { PlotTrace, SampleRow }
 
 export component AppWindow inherits Window {
-    title: "OpenDrop";
+    title: "Tiselius";
     default-font-size: 13px;
     background: Theme.window-bg;
     preferred-width: 1120px;
@@ -113,7 +113,7 @@ export component AppWindow inherits Window {
         Menu {
             title: "Help";
             MenuItem {
-                title: "About OpenDrop";
+                title: "About Tiselius";
                 activated => { root.about-open = true; }
             }
         }

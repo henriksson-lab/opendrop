@@ -1,6 +1,11 @@
-# OpenDrop
+# Tiselius
 
-An open-source, cross-platform GUI to control the **NanoDrop ND-1000** microvolume UV-Vis spectrophotometer
+An open-source, cross-platform GUI to control UV-Vis spectrophotometers
+
+**Hardware support:**
+
+* **NanoDrop ND-1000** microvolume UV-Vis spectrophotometer (Not affiliated with or endorsed by Thermo Fisher Scientific)
+
 
 **Still being developed**
 
@@ -10,7 +15,7 @@ A single window: a measurement toolbar, an overlaid spectrum plot, and a table
 of acquired samples. Select rows to overlay their spectra; export the plot and
 table to PDF from the File menu. Feature requests are welcome (use github issues).
 
-![OpenDrop](docs/images/opendrop.png)
+![Tiselius](docs/images/tiselius.png)
 
 ## Building & running
 
@@ -20,19 +25,19 @@ cargo test         # run all tests
 cargo clippy       # lint
 ```
 
-### Using OpenDrop as a library
+### Using Tiselius as a library
 
 Disable default features to depend on the measurement/device/format code
 without pulling in Slint:
 
 ```toml
 [dependencies]
-opendrop = { version = "0.1", default-features = false }
+tiselius = { version = "0.1", default-features = false }
 ```
 
 ```rust
-use opendrop::measure::{calc, Spectrum};
-use opendrop::formats::read_archive;
+use tiselius::measure::{calc, Spectrum};
+use tiselius::formats::read_archive;
 ```
 
 ## License

@@ -48,7 +48,7 @@ const PLOT_Y1: f32 = 182.0;
 /// Render `report` to a PDF at `path`.
 pub fn export(path: &Path, report: &Report) -> anyhow::Result<()> {
     let (doc, page, layer_idx) =
-        PdfDocument::new("OpenDrop Report", Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
+        PdfDocument::new("Tiselius Report", Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
     let layer = doc.get_page(page).get_layer(layer_idx);
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
@@ -60,7 +60,7 @@ pub fn export(path: &Path, report: &Report) -> anyhow::Result<()> {
     // --- Title + instrument line ---
     layer.set_fill_color(gray(0.11));
     layer.use_text(
-        "OpenDrop — Nucleic Acid Report",
+        "Tiselius — Nucleic Acid Report",
         18.0,
         Mm(15.0),
         Mm(196.0),
@@ -367,7 +367,7 @@ mod tests {
                 .collect(),
         };
 
-        let path = std::env::temp_dir().join("opendrop_pdf_export_test.pdf");
+        let path = std::env::temp_dir().join("tiselius_pdf_export_test.pdf");
         export(&path, &report).expect("export should succeed");
 
         let bytes = std::fs::read(&path).expect("output file should exist");
